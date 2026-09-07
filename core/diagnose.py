@@ -538,7 +538,13 @@ def _explain_no_log(install_dir: Path, man: dict, rep: Report,
             "A launcher or a different executable in another folder does not "
             "pick up the files here. Point the tool at the folder holding the "
             "executable that actually runs.")
-    if proxy:
+    if proxy == VULKAN_LAYER:
+        rep.add(INFO, f"Or the {app} is not running on Vulkan.",
+                "ReShade reaches this install as a Vulkan layer, so the game "
+                "(or emulator) has to render with Vulkan - check its renderer "
+                "setting. A game that shipped through DXVK does; an emulator "
+                "left on OpenGL or D3D does not, and no ReShade.log appears.")
+    elif proxy:
         alt = "d3d11.dll" if proxy.lower() == "dxgi.dll" else "dxgi.dll"
         rep.add(INFO, f"Or the {app} ignores {proxy}.",
                 f"Some load the graphics DLLs in a way that skips {proxy}. "
@@ -672,7 +678,14 @@ def analyse(install_dir: Path) -> Report:
     # --- what loaded ----------------------------------------------------
     if rtext:
         loaded = []
+        seen_addons: set[str] = set()
         for m in re.finditer(r'Registered add-on "([^"]+)" v(\S+)', rtext):
+            # ReShade.log accumulates one line per session; five launches
+            # showed the same add-on five times in a report (issue #22).
+            key = m.group(1) + m.group(2)
+            if key in seen_addons:
+                continue
+            seen_addons.add(key)
             rep.add(OK, f"ReShade loaded add-on: {m.group(1)} {m.group(2)}")
             loaded.append(m.group(1))
 
@@ -766,9 +779,11 @@ def analyse(install_dir: Path) -> Report:
         if d3d9_only and str(man.get("api") or "").upper() in ("DX11", "DX12"):
             rep.add(WARN, "ReShade attached to a Direct3D 9 device, not DXGI.",
                     "The app renders with D3D9 here (a video player on the EVR "
-                    "renderer, or a game in D3D9 mode); the feed needs "
-                    "D3D11/12. Switch the renderer to one that uses D3D11, or "
-                    "the game to DX11/DX12, and play again.")
+                    "renderer, or a game that links D3D11 but draws with "
+                    "D3D9); the feed needs D3D11/12. Either switch the game "
+                    "or player to D3D11/12, or set 'graphics api' to DirectX 9 "
+                    "on the install page and install again - the game then "
+                    "goes through DXVK like any DirectX 9 title.")
 
         # The game exiting before a swapchain exists means it never got to
         # rendering at all - nothing downstream of this is worth reading.
@@ -925,6 +940,25 @@ def analyse(install_dir: Path) -> Report:
     # 0xC0000005 at ... in Game.exe; this add-on was last doing: <step>" and
     # a dump path on the next line. Frames may have been delivered just
     # before, so this has to be read before "Working." is declared.
+    # Driver 616.64+ with renodx-dlss5 4.6/4.7: the helper (or the feed)
+    # catches an access violation inside D3D12Core.dll on every evaluate and
+    # the game simply never gets a neural frame. The feeder's 0.14 builds
+    # print the module chain; the chain is the signature.
+    drv = re.search(r"evaluate raised 0xC0000005[^\n]*in D3D12Core\.dll", joined)
+    if drv and re.search(r"nvngx_dlssnr\.dll\s*<-\s*_nvngx\.dll\s*<-\s*renodx-dlss5", joined):
+        rep.add(BAD, "Every DLSS evaluate faults inside NVIDIA's NGX runtime "
+                     "(D3D12Core.dll <- nvngx_dlssnr.dll <- _nvngx.dll <- "
+                     "renodx-dlss5).",
+                "This is NVIDIA driver 616.64 or newer with the renodx-dlss5 "
+                "4.6/4.7 add-on: the driver routes the feature into the "
+                "runtime itself and those builds do not survive it (measured "
+                "by the feeder's author, DLSS5-Feeder #54). Install again: "
+                "the tool pins the add-on to 4.55 on these drivers, which "
+                "passes. The bridge route works around it in "
+                "memory; rolling the driver back to 616.56 also works.")
+        rep.verdict = ("Driver 616.64+ faults with renodx-dlss5 4.6/4.7 - install "
+                       "again; the tool pins 4.55.")
+        return rep
     rec = re.search(r"### CRASH RECORDED ###\s+exception (0x[0-9A-Fa-f]+)[^\n]*?"
                     r"last doing: ([^\n]+)", joined)
     if rec:
@@ -933,7 +967,7 @@ def analyse(install_dir: Path) -> Report:
                      f"{rec.group(2).strip()}.",
                 "That is the feeder itself going down, not the install. Two "
                 "things to try from the install page: another 'feeder build' "
-                "from the list (the stable 0.7.0 is the long-tested 32-bit "
+                "from the list (the stable release is the long-tested 32-bit "
                 "path), and a lower work resolution. Then report it to the "
                 "DLSS5-Feeder project with this log"
                 + (f" and the dump ({dump.group(1).strip()}; zip it, it "
@@ -1154,6 +1188,11 @@ def _block(title: str, lines: list[str], budget: int) -> str:
     return f"\n**{title}**\n```\n{body}\n```\n"
 
 
+# DLSS5_MV_PROVIDER -> the shader file the feeder needs for it.
+PROVIDER_FX = {2: "vort_Motion.fx", 3: "lumenite_Kernel.fx",
+               4: "lumenite_QuantMotion.fx"}
+
+
 def _presence(install_dir: Path, man: dict, route: str) -> list[str]:
     """One line per file that decides whether anything can load at all."""
     names: list[str] = []
@@ -1205,6 +1244,15 @@ def _presence(install_dir: Path, man: dict, route: str) -> list[str]:
         names.append("host64/nvngx_dlssnr.dll")
     else:
         names.append("nvngx_dlssnr.dll")
+    if route == "feeder":
+        # The feed is a shader technique plus a motion-vector provider; when
+        # either file is gone the add-ons load and nothing happens (issue
+        # #13, Dying Light: "DLSS5_Feed.fx never loaded" with no way to see
+        # from the report whether the file was there).
+        names.append("reshade-shaders/Shaders/DLSS5_Feed.fx")
+        prov = PROVIDER_FX.get(man.get("provider"))
+        if prov:
+            names.append("reshade-shaders/Shaders/" + prov)
     out = []
     for n in dict.fromkeys(names):
         state = "present" if (install_dir / n).is_file() else "MISSING"
@@ -1239,6 +1287,7 @@ def issue_body(version: str, gpu_name: str, sm, driver: str, game, route: str,
 
     exe = getattr(getattr(game, "exe", None), "name", None) or "-"
     head = (
+        "**Did the game start?** yes / no / it closed itself\n\n"
         "**What happened**\n\n\n"
         "**What I expected**\n\n\n"
         "---\n"

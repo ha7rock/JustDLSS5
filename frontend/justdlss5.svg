@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <title>JustDLSS5</title>
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="#15191e"/>
+  <path d="M88 58H62a8 8 0 0 0-8 8v124a8 8 0 0 0 8 8h26M168 58h26a8 8 0 0 1 8 8v124a8 8 0 0 1-8 8h-26"
+        fill="none" stroke="#879b6d" stroke-width="12" stroke-linecap="square"/>
+  <path d="M184 62H94L82 136h50c22 0 34 7 34 20 0 14-13 22-33 22-19 0-34-6-49-17l-16 25c18 15 40 23 66 23 40 0 66-21 66-54 0-31-23-49-61-49h-19l3-15h56z"
+        transform="translate(128 128) scale(.68) translate(-134 -136)" fill="#b6e477"/>
+</svg>

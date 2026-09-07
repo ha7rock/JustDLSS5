@@ -1,149 +1,35 @@
-# Builds the released executable on GitHub's own runners, from the source in
-# this repository, and publishes it with a signed provenance attestation.
-#
-# The point is that nobody has to take anyone's word for what is in the .exe.
-# The build happens in public, the log is public, and the attestation ties the
-# published binary to this exact commit. If the file someone downloads does
-# not match the hash in the release notes, it did not come from here.
-#
-# About antivirus: PyInstaller's stock bootloader is the part heuristic
-# scanners have learned to distrust, because plenty of real malware ships in
-# the same wrapper. Building PyInstaller from source compiles a fresh
-# bootloader on this runner - byte-for-byte different from the one every
-# scanner has a signature for - which removes most of the false positives.
-# It cannot remove SmartScreen's "unknown publisher" prompt: that needs a
-# code-signing certificate, which costs money the project does not have.
-name: release
+name: Desktop checks
 
 on:
   push:
-    tags: ["v*"]
-  workflow_dispatch:          # lets a build be run by hand, without a tag
+    branches: [main, 'codex/**']
+  pull_request:
+  workflow_dispatch:
 
 permissions:
-  contents: write             # create the release and upload to it
-  id-token: write             # sign the provenance attestation
-  attestations: write
+  contents: read
 
 jobs:
-  build:
+  windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-
-      # From source, so the bootloader is compiled here rather than taken
-      # from the wheel every scanner has seen. Falls back to the wheel if the
-      # runner cannot compile it - the build must not fail over this.
-      - name: Install PyInstaller (fresh bootloader)
-        shell: bash
+          python-version: '3.12'
+      - name: Install desktop dependencies
+        run: python -m pip install -r requirements-desktop.txt
+      - name: Check backend interface
+        run: python tools/check_backend.py
+      - name: Regression tests
         run: |
-          python -m pip install --upgrade pip wheel setuptools
-          if python -m pip install --no-binary pyinstaller --no-cache-dir pyinstaller; then
-            echo "BOOTLOADER=compiled on this runner" >> "$GITHUB_ENV"
-          else
-            echo "::warning::could not build PyInstaller from source; using the wheel"
-            python -m pip install pyinstaller
-            echo "BOOTLOADER=stock wheel" >> "$GITHUB_ENV"
-          fi
-          python -m PyInstaller --version
-
-      # The tool has no third-party dependencies - standard library and
-      # tkinter only - so there is nothing else to install, and nothing from
-      # PyPI ends up inside the executable.
-      - name: Check there are no third-party imports
-        shell: bash
-        run: |
-          if [ -f requirements.txt ]; then
-            echo "requirements.txt exists - review it before trusting this build"
-            cat requirements.txt
-          else
-            echo "no requirements.txt: standard library only"
-          fi
-          if grep -rEn "^(import|from) (requests|numpy|PIL|psutil|pefile)\b" core dlss5_autopilot.py; then
-            echo "third-party import found"; exit 1
-          fi
-
-      - name: Tests that need no network
-        shell: bash
-        run: python test_reshade_ini.py
-
-      - name: Build
-        run: |
-          python -m PyInstaller --onefile --windowed --noupx `
-            --name dlss5-autopilot `
-            --version-file version_info.txt `
-            --icon dlss5-autopilot.ico `
-            --distpath dist `
-            --noconfirm `
-            dlss5_autopilot.py
-
-      - name: Package
-        shell: bash
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          [ -z "$VERSION" ] && VERSION="dev"
-          mkdir -p out
-          cp dist/dlss5-autopilot.exe out/
-          cp README.md LICENSE out/
-          cd out
-          7z a "../DLSS5-Autopilot-v${VERSION}-win64.zip" ./*
-          cd ..
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-
-      - name: Hashes
-        shell: bash
-        run: |
-          sha256sum dist/dlss5-autopilot.exe \
-                    "DLSS5-Autopilot-v${VERSION}-win64.zip" > SHA256SUMS.txt
-          cat SHA256SUMS.txt
-          {
-            echo '### SHA-256'
-            echo '```'
-            cat SHA256SUMS.txt
-            echo '```'
-            echo "bootloader: $BOOTLOADER"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      # Ties the binary to this commit and this workflow run, verifiable with
-      #     gh attestation verify dlss5-autopilot.exe --repo <owner>/<repo>
-      - uses: actions/attest-build-provenance@v1
-        with:
-          subject-path: |
-            dist/dlss5-autopilot.exe
-            DLSS5-Autopilot-v${{ env.VERSION }}-win64.zip
-
-      # Creates the release if the tag was pushed without one, so a plain
-      # `git push --tags` is enough to publish.
-      - name: Upload to the release
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          TAG="${{ github.ref_name }}"
-          ZIP="DLSS5-Autopilot-v${VERSION}-win64.zip"
-          NOTES="release-notes-${TAG}.md"
-          TITLE="DLSS 5 Autopilot ${TAG}"
-          # The notes are the notes file, nothing else. The hashes travel as
-          # SHA256SUMS.txt beside the build (the self-updater reads it) and the
-          # provenance attestation is on the commit - no essay on the page.
-          if [ -f "$NOTES" ]; then cp "$NOTES" FULL-NOTES.md; else echo "See the commit history for what changed." > FULL-NOTES.md; fi
-          # A release whose tag was re-pushed comes back as a DRAFT and is
-          # invisible to everyone; publish it explicitly and mark it latest.
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release edit "$TAG" --title "$TITLE" --notes-file FULL-NOTES.md --draft=false --latest
-          else
-            gh release create "$TAG" --title "$TITLE" --notes-file FULL-NOTES.md --latest
-          fi
-          gh release upload "$TAG" "$ZIP" "SHA256SUMS.txt" --clobber
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dlss5-autopilot-${{ env.VERSION }}
-          path: |
-            DLSS5-Autopilot-v${{ env.VERSION }}-win64.zip
-            SHA256SUMS.txt
+          python test_ui.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python test_cli.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python test_reshade_ini.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build JustDLSS5
+        run: python tools/build_desktop.py
+      - name: Verify packaged startup
+        run: python tools/smoke_desktop.py

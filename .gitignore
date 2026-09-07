@@ -17,3 +17,6 @@ renodx/
 # Local settings
 settings.json
 
+.venv/
+backend-backups/
+

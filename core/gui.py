@@ -23,6 +23,7 @@ from . import (anticheat, components, diagnose, dlss, dxvk, feedcfg, reengine,
                games, gpu, profiles, video,
                installer, log, optiscaler, prefs, reshade_ini, selfupdate,
                sources, update)
+from . import mfg as _mfg
 
 APP = "dlss5 autopilot"
 
@@ -45,6 +46,9 @@ RED     = "#c96a5a"
 
 # Cascadia ships with Windows Terminal and VS; Consolas is on every Windows.
 MONO = ("Cascadia Mono", "Consolas", "Courier New")
+# First entry of the DLSS 5 add-on dropdown. _opts() turns anything that
+# starts with "auto" into None, which is what lets installer.install() pin.
+ADDON_AUTO = "auto - the newest build that works on this driver and route"
 
 
 def font(size: int = 10, weight: str = "normal") -> tuple:
@@ -85,6 +89,8 @@ class App:
         self.workres = tk.IntVar(value=100)
         self.feeder_pre = tk.BooleanVar(value=False)
         self.dxvk = tk.BooleanVar(value=False)
+        self.fg = tk.BooleanVar(value=False)
+        self.mfg = tk.BooleanVar(value=False)
         self.sm: int | None = None          # the card's architecture, once known
         self.stale: dict[str, int] = {}     # install folder -> outdated parts
         self.route_fit: dict[str, tuple[bool, str]] = {}
@@ -441,8 +447,6 @@ class App:
         vtop.pack(fill="x")
         tk.Label(vtop, text="video and youtube", bg=PANEL, fg=TXT,
                  font=font(10, "bold")).pack(side="left")
-        tk.Label(vtop, text="new", bg=PANEL, fg=AMBER, font=font(8))\
-            .pack(side="left", padx=10)
         ttk.Button(vtop, text="set up the video player",
                    command=self._video_setup).pack(side="right")
         self.videolbl = tk.Label(
@@ -467,8 +471,6 @@ class App:
         rtop.pack(fill="x")
         tk.Label(rtop, text="rtx remix", bg=PANEL, fg=TXT,
                  font=font(10, "bold")).pack(side="left")
-        tk.Label(rtop, text="new", bg=PANEL, fg=AMBER, font=font(8))\
-            .pack(side="left", padx=10)
         ttk.Button(rtop, text="which of my games have a remix mod?",
                    command=self._show_remix).pack(side="right")
         self.remixlbl = tk.Label(
@@ -477,8 +479,8 @@ class App:
             text="RTX Remix is a separate, free NVIDIA mod that rebuilds an old "
                  "game (2000s-era, fixed-function DirectX - GTA IV, Portal, Deus "
                  "Ex, Vampire Bloodlines...) with real-time ray tracing: a full "
-                 "graphics overhaul, not a filter. A handful of those mods now "
-                 "run DLSS 5 inside that new engine.\n\n"
+                 "graphics overhaul, not a filter. A handful of those mods "
+                 "run DLSS 5 inside that engine.\n\n"
                  "install the mod yourself (see the list below), then rescan: "
                  "this tool finds its .trex runtime and switches DLSS 5 on in "
                  "it. no reshade, no feeder, nothing else changes. proven on "
@@ -505,8 +507,8 @@ class App:
             text="dlss5 works reliably on 64-bit directx 11/12. directx 9, "
                  "opengl, vulkan and every 32-bit game go through extra "
                  "translation, a layer or a helper process, and the dlss "
-                 "feature fails to create there far more often. directx 10 is "
-                 "not supported by anything. each game is labelled honestly - "
+                 "feature fails to create there far more often. directx 10 goes "
+                 "through the feeder only (build 0.13.1 and later). each game is labelled - "
                  "do not expect the long shots to work.\n\nnever use any of "
                  "this online: anti-cheat flags reshade add-ons.")
         self.realitylbl.pack(anchor="w", pady=(6, 0))
@@ -523,6 +525,14 @@ class App:
         ttk.Button(top, text="choose folder", command=self._pick_folder)\
             .pack(side="right", padx=(8, 0))
         ttk.Button(top, text="rescan", command=self._scan).pack(side="right")
+        # Some libraries are huge, and some people only ever want to point
+        # at one folder (issue #18): the automatic scan can be switched off.
+        self.scan_on_start = tk.BooleanVar(value=bool(prefs.get("scan_on_start", True)))
+        tk.Checkbutton(top, text="scan library at start", variable=self.scan_on_start,
+                       command=lambda: prefs.set_("scan_on_start", bool(self.scan_on_start.get())),
+                       bg=BG, fg=DIM, selectcolor=FIELD, activebackground=BG,
+                       activeforeground=TXT, font=font(8), borderwidth=0)\
+            .pack(side="right", padx=(0, 8))
         # Removing an install should not mean walking the whole wizard again.
         self.btn_rm2 = ttk.Button(top, text="uninstall", state="disabled",
                                   command=self._uninstall)
@@ -826,7 +836,7 @@ class App:
         threading.Thread(target=work, daemon=True).start()
 
     def _webcam_started(self, cam: str, t0: float) -> None:
-        self._log(f"> webcam '{cam}' started - the player opens the stream; "
+        self._log(f"> '{cam}' started - the player opens the stream; "
                   f"checking in 10 s whether the feed is processing it...")
         folder = self.game.install_dir if self.game else None
         if folder is None:
@@ -834,20 +844,52 @@ class App:
         if True:
             def verify() -> None:
                 frames, mv = video.feed_frames_since(folder, t0)
+                sent = video.capture_frames_sent()
+                if sent:
+                    self._log(f"> capture: {sent} frames sent to the player so far")
                 if frames >= 3:
-                    self._log(f"> camera through DLSS 5: yes - {frames} frames "
+                    self._log(f"> '{cam}' through DLSS 5: yes - {frames} frames "
                               f"processed so far" + (", motion alive" if mv else "")
                               + ". F6 toggles it, 'stop' ends the stream.", "ok")
                 else:
-                    self._log("!! the feed has not processed camera frames yet. "
+                    self._log("!! the feed has not processed any frames yet. "
                               "if the player shows the picture, give it a few "
                               "seconds and press 'did it work?'; if it shows "
-                              "nothing, another app may hold the camera.", "warn")
+                              "nothing, another app may hold the camera, or the "
+                              "window is minimised.", "warn")
             self.root.after(10000, verify)
 
     def _stop_webcam(self) -> None:
         video.stop_webcam()
-        self._log("> webcam stream stopped")
+        self._log("> stream stopped")
+
+    def _refresh_screens(self, then=None) -> None:
+        items = video.list_screens()
+        self.cb_screen["values"] = items
+        self.cb_screen.current(0)
+        self._log(f"> {len(items)} screens and windows listed")
+        if then:
+            then()
+
+    def _start_screen(self) -> None:
+        if not self.game or getattr(self.game, "kind", "") != "video":
+            return
+        target = self.cb_screen.get()
+        if not target or target.startswith("("):
+            self._refresh_screens(then=self._start_screen)
+            return
+        import time
+        t0 = time.time()
+        folder = self.game.install_dir
+        self._log(f"> '{target}': starting the capture...")
+
+        def work() -> None:
+            try:
+                video.start_screen(folder, target)
+                self.q.put(("webcam_started", (target, t0)))
+            except Exception as e:
+                self.q.put(("webcam_failed", str(e)))
+        threading.Thread(target=work, daemon=True).start()
 
     def _open_processed(self) -> None:
         if not self.game or getattr(self.game, "kind", "") != "video":
@@ -993,7 +1035,7 @@ class App:
                 except Exception:
                     continue
             if parts:
-                self.q.put(("board", "components today:  " + "  |  ".join(parts)))
+                self.q.put(("board", "publishers ship:  " + "  |  ".join(parts)))
         threading.Thread(target=work, daemon=True).start()
 
     def _update_all(self) -> None:
@@ -1127,7 +1169,9 @@ class App:
             if not ok:
                 status, tag, outlook = "unsupported", "unsupported", "-"
             elif ac_present:
-                status, tag, outlook = f"{ac_summary}!", "unsupported", "blocked"
+                # Not refused - it is their machine - but said up front, and
+                # asked again before INSTALL.
+                status, tag, outlook = f"{ac_summary}!", "shaky", "online - at your own risk"
             elif g.installed:
                 # Read fresh every time: this changes on install and uninstall.
                 n_stale = self.stale.get(str(g.install_dir), 0)
@@ -1205,8 +1249,9 @@ class App:
             lines.append(f"note   {why}")
         ac = anticheat.detect(g.install_dir, g.folder)
         if ac.present:
-            lines.append(f"BLOCK  {ac.summary} is installed here - ReShade "
-                         f"add-ons will be blocked or get you banned")
+            lines.append(f"WARN   {ac.summary} is installed here. This is an online "
+                         f"game: its anti-cheat can refuse to start, remove the "
+                         f"files, or ban the account. Installing is your decision")
         if sup.recommended != dlss.REMIX and reengine.detected(g.install_dir):
             lines.append("note   RE Engine (Capcom) game - ReShade's add-ons "
                          "are documented to crash titles like this, worst on "
@@ -1367,6 +1412,15 @@ class App:
         self.cb_nrstyle.current(0)
         self.nrhint = tk.Label(inner, text="the rest is on the overlay (Insert)",
                                bg=PANEL, fg=DIM, font=font(8))
+        # FSR 3.1 frame generation from the libraries OptiScaler ships; any
+        # RTX card, D3D12 games. NVIDIA's multi-frame (3x/4x) is RTX 50
+        # hardware and is not offered as if it were this.
+        self.ck_fg = tk.Checkbutton(
+            inner, text="frame generation  -  FSR 3.1 through OptiScaler, 2x, "
+                        "any RTX card (D3D12; game's own frame gen off)",
+            variable=self.fg, bg=PANEL, fg=DIM, selectcolor=FIELD,
+            activebackground=PANEL, activeforeground=TXT, font=font(8),
+            borderwidth=0)
 
         # The feeder's pre-releases carry support for the newer add-on builds;
         # any exact release can be pinned when the newest one breaks a game.
@@ -1393,6 +1447,22 @@ class App:
             variable=self.dxvk, bg=PANEL, fg=DIM, selectcolor=FIELD,
             activebackground=PANEL, activeforeground=TXT, font=font(8),
             borderwidth=0, command=lambda: self._set_pathlbl(self.game))
+        # The executable's import table decides the API; when it lies (a
+        # game that links D3D11 and renders with D3D9, or one whose renderer
+        # is a launcher setting) the person can say so here. Remembered per
+        # folder.
+        self.lbl_api = tk.Label(inner, text="graphics api", bg=PANEL, fg=DIM, font=font(9))
+        self.cb_api = ttk.Combobox(inner, state="readonly", width=44, values=["auto"])
+        self.cb_api.bind("<<ComboboxSelected>>", self._on_api)
+        # RTX 40 only, and only when the folder shows DLSS Frame Generation:
+        # dashdogy's unlock raises the multiplier of a feature the game has.
+        self.ck_mfg = tk.Checkbutton(
+            inner, text="multi-frame generation on this RTX 40 (3x/4x): dashdogy's "
+                        "RTX40MFG-Unlock + Ultimate ASI Loader. Needs the game's own "
+                        "DLSS Frame Generation ON. Research software - can crash",
+            variable=self.mfg, bg=PANEL, fg=DIM, selectcolor=FIELD,
+            activebackground=PANEL, activeforeground=TXT, font=font(8),
+            borderwidth=0)
 
         self.reswarn = tk.Label(
             inner, bg=PANEL, fg=RUST, font=font(8), justify="left", anchor="w",
@@ -1461,6 +1531,21 @@ class App:
         ttk.Button(wr, text="stop", command=self._stop_webcam).pack(side="left")
         tk.Label(wr, text="live camera through DLSS 5 in the player, about half "
                           "a second behind; F6 to compare",
+                 bg=PANEL, fg=DIM, font=font(8)).pack(side="left", padx=(12, 0))
+        # Fourth line: a screen or a window - the browser, a stream, an
+        # emulator, a game nothing should be injected into.
+        sr = tk.Frame(self.urlrow, bg=PANEL)
+        sr.pack(fill="x", padx=12, pady=(0, 8))
+        tk.Label(sr, text="screen", bg=PANEL, fg=DIM, font=font(9)).pack(side="left")
+        self.cb_screen = ttk.Combobox(sr, state="readonly", width=34, values=["(press refresh)"])
+        self.cb_screen.current(0)
+        self.cb_screen.pack(side="left", padx=(10, 6))
+        ttk.Button(sr, text="refresh", command=self._refresh_screens).pack(side="left")
+        ttk.Button(sr, text="start", style="Accent.TButton",
+                   command=self._start_screen).pack(side="left", padx=(10, 6))
+        ttk.Button(sr, text="stop", command=self._stop_webcam).pack(side="left")
+        tk.Label(sr, text="screen: the left part of the desktop, player parked on the right  "
+                          "|  window: that window only - the player can go fullscreen over it",
                  bg=PANEL, fg=DIM, font=font(8)).pack(side="left", padx=(12, 0))
         self.urlhint = tk.Label(
             self.urlrow, bg=PANEL, fg=DIM, font=font(8), anchor="w",
@@ -1726,6 +1811,9 @@ class App:
         # What this route will not tolerate, in plain words, before INSTALL.
         for line in getattr(dlss, "CONFLICTS", {}).get(path, ()):
             text += "\n  !  " + line
+        for line in dlss.quirks(self.game.exe if self.game else None,
+                                self.game.api if self.game else ""):
+            text += "\n  !  " + line
         self.routelbl.config(text=text, fg=RUST if not usable else DIM)
         feeder = path == dlss.FEEDER
         opti = path == dlss.OPTI
@@ -1734,7 +1822,7 @@ class App:
         # Rows 9/10: the feeder's preset + hdr, or OptiScaler's preset + style.
         for w in (self.lbl_preset, self.cb_preset, self.lbl_hdr, self.cb_hdr,
                   self.dlaalbl, self.lbl_nrpreset, self.cb_nrpreset,
-                  self.lbl_nrstyle, self.cb_nrstyle, self.nrhint,
+                  self.lbl_nrstyle, self.cb_nrstyle, self.nrhint, self.ck_fg,
                   self.lbl_feederver, self.cb_feederver, self.feederhint):
             w.grid_remove()
         if opti:
@@ -1743,6 +1831,10 @@ class App:
             self.lbl_nrstyle.grid(row=10, column=0, sticky="w", padx=(0, 14), pady=5)
             self.cb_nrstyle.grid(row=10, column=1, sticky="w", pady=5)
             self.nrhint.grid(row=10, column=2, sticky="w", padx=(10, 0))
+            if self.game and self.game.api == "DX12":
+                self.ck_fg.grid(row=11, column=0, columnspan=3, sticky="w", pady=(0, 5))
+            else:
+                self.fg.set(False)
         else:
             self.lbl_preset.grid(row=9, column=0, sticky="w", padx=(0, 14), pady=5)
             self.cb_preset.grid(row=9, column=1, columnspan=2, sticky="ew", pady=5)
@@ -1792,6 +1884,14 @@ class App:
         else:
             self.ck_dxvk.grid_remove()
             self.dxvk.set(False)
+        if self.game and not opti and path != dlss.REMIX and \
+                _mfg.applies(self._sm(), self.game.api, self.game.install_dir,
+                             self.game.folder)[0]:
+            self.ck_mfg.grid(row=14, column=0, columnspan=3, sticky="w",
+                             pady=(6, 0))
+        else:
+            self.ck_mfg.grid_remove()
+            self.mfg.set(False)
         self._sync_workres()
         if self.game:
             level, why = installer.reliability(self.game, path)
@@ -1811,9 +1911,16 @@ class App:
         return dlss.LABELS[o] + tail
 
     def _fill_addon_list(self, sf: bool) -> None:
-        """The DLSS 5 add-on dropdown for the route: SF or renodx-dlss5."""
+        """The DLSS 5 add-on dropdown for the route: SF or renodx-dlss5.
+
+        Opens on "auto": the installer then applies its pins (4.55 on driver
+        616.64+, 4.60 on OpenGL, the feeder's accepted build). A label picked
+        from the list is an explicit choice and skips them.
+        """
         fam = "renodx_sf" if sf else "renodx"
         vals = [e["label"] for e in self.catalog.get(fam, [])]
+        if vals:
+            vals = [ADDON_AUTO] + vals
         found, _ = prefs.find_renodx(sf=sf)
         self.renodx_local = found
         if found:
@@ -1960,9 +2067,35 @@ class App:
             text=f"{short}   ::   {g.bit_label} {g.api}  ->  "
                  f"reshade = {installer._proxy_name(api, self._opts().reshade_proxy)}{extra}")
 
+    def _on_api(self, _e=None) -> None:
+        g = self.game
+        if not g or not hasattr(self, "cb_api"):
+            return
+        i = self.cb_api.current()
+        chosen = "" if i <= 0 else games.APIS[i - 1]
+        games.set_api_override(g.folder, chosen or None)
+        detected = getattr(g, "api_detected", "") or g.api
+        g.api = chosen or detected
+        g.api_why = (f"set by hand (detected {detected})" if chosen
+                     else "detected from the executable")
+        self._log(f"> graphics api: {g.api}" + ("" if chosen else " (auto)"))
+        self._enter_install()
+
     def _enter_install(self) -> None:
         g = self.game
         self.gamelbl.config(text=g.name)
+        if getattr(g, "kind", "") != "video":
+            detected = getattr(g, "api_detected", "") or g.api
+            self.cb_api["values"] = [f"auto  -  {detected} from the executable"] + \
+                [{"DX9": "DirectX 9", "DX10": "DirectX 10", "DX11": "DirectX 11",
+                  "DX12": "DirectX 12"}.get(a, a) for a in games.APIS]
+            forced = games.api_override(g.folder)
+            self.cb_api.current(games.APIS.index(forced) + 1 if forced in games.APIS else 0)
+            self.lbl_api.grid(row=15, column=0, sticky="w", padx=(0, 14), pady=(6, 0))
+            self.cb_api.grid(row=15, column=1, columnspan=2, sticky="w", pady=(6, 0))
+        else:
+            self.lbl_api.grid_remove()
+            self.cb_api.grid_remove()
         self.profile_extra = None
         self._refresh_profiles()
         is_video = getattr(g, "kind", "") == "video"
@@ -2145,6 +2278,8 @@ class App:
             feeder_tag=(self.feeder_tags[self.cb_feederver.current() - 2]
                         if self.cb_feederver.current() >= 2 else ""),
             dxvk=self.dxvk.get(),
+            fg=bool(self.fg.get()) and getattr(self, 'route', None) == dlss.OPTI,
+            mfg=bool(self.mfg.get()),
             path=getattr(self, 'route', dlss.FEEDER),
             native_dlss=bool(self.support and self.support.native_dlss),
             upscaler=str(getattr(self.support, 'upscaler', '') or ''),
@@ -2157,6 +2292,18 @@ class App:
     # ---------------------------------------------------------------- actions
     def _install(self) -> None:
         if self.busy or not self.game:
+            return
+        try:
+            ac = anticheat.detect(self.game.install_dir, self.game.folder)
+        except Exception:
+            ac = None
+        if ac is not None and ac.present and not messagebox.askyesno(
+                APP,
+                f"{ac.summary} is installed in this game.\n\n"
+                f"This is an online game. ReShade add-ons and anti-cheat do not "
+                f"coexist: the game may refuse to start, delete the files, or "
+                f"ban the account. Nobody but you carries that risk.\n\n"
+                f"Install anyway?"):
             return
         self.busy = True
         self.btn_next.config(state="disabled", text="installing")
@@ -2213,8 +2360,15 @@ class App:
             return
         if self.step == 1:
             self._show(2)
-            if not self.all_games:
+            if not self.all_games and self.scan_on_start.get():
                 self._scan()
+            elif not self.all_games:
+                self.scanlbl.config(text="library scan is off - press rescan, "
+                                         "or choose folder for one game")
+                kp = video.known()
+                if kp:
+                    self.all_games.insert(0, kp)
+                self._fill()
             else:
                 self._fill()
         elif self.step == 2:
@@ -2249,7 +2403,12 @@ class App:
                     self.status.config(text=payload.lower())
                 elif kind == "scanned":
                     self.busy = False
-                    self.all_games = payload
+                    # A folder chosen while the scan was still running used
+                    # to vanish when the scan finished (issue #18).
+                    found = {str(g.folder).lower() for g in payload}
+                    kept = [g for g in self.all_games
+                            if g.source == "Manual" and str(g.folder).lower() not in found]
+                    self.all_games = kept + payload
                     kp = video.known()
                     if kp and not any(x.install_dir == kp.install_dir
                                       for x in payload):
@@ -2309,7 +2468,7 @@ class App:
                 elif kind == "webcam_started":
                     self._webcam_started(*payload)
                 elif kind == "webcam_failed":
-                    self._log(f"!! webcam: {payload}", "err")
+                    self._log(f"!! capture: {payload}", "err")
                     messagebox.showerror(APP, payload)
                 elif kind == "processed":
                     self._idle()
