@@ -6,7 +6,7 @@ JustDLSS5 project code is MIT licensed. The original DLSS5-Autopilot copyright a
 
 - Qt 6.11.2: Qt Core, Gui, Widgets, Network, OpenGL and Svg, with the Windows, GIF, ICO, JPEG and SVG plugins used by this application. Distributed under the available LGPL v3 option, with third-party components retaining their own licenses.
 - PySide6 Essentials and Shiboken6 6.11.2: Python bindings, distributed under the available LGPL v3 option. The PyPI wheels support both open-source and commercial licensing; their commercial-license file does not replace the open-source terms we use.
-- CPython 3.12.14 and standard-library dependencies: Python Software Foundation terms and the respective component licenses, including OpenSSL, libffi, bzip2, xz/liblzma, zlib and Expat.
+- CPython 3.12.10 (GitHub release builds) or 3.12.14 (local development builds) and standard-library dependencies: Python Software Foundation terms and the respective component licenses, including OpenSSL, libffi, bzip2, xz/liblzma, zlib and Expat.
 - PyInstaller 6.22.2 bootloader and runtime hooks: see its included `COPYING.txt`, including the bootloader distribution exception and runtime-file terms.
 - Microsoft Visual C++ runtime libraries: Microsoft runtime terms. These files are not covered by the project's MIT license.
 
@@ -18,7 +18,7 @@ The same GitHub Release supplies `JustDLSS5-v<version>-source-materials.zip` alo
 
 Release page: https://github.com/ha7rock/JustDLSS5/releases
 
-Qt and PySide are dynamically loaded from `_internal`. We impose no restriction on replacing these libraries with compatible modified versions, or on reverse engineering needed to debug modifications to LGPL-covered libraries. Keep ABI-compatible versions and architectures together. For a rebuild, unpack the JustDLSS5 source, install Python 3.12.14 x64, install `requirements-desktop.txt`, and run `python tools/build_desktop.py`. To use modified Qt/PySide, build matching bindings and install them into that build environment first. Dependency sources include their own build instructions. No activation key is required.
+Qt and PySide are dynamically loaded from `_internal`. We impose no restriction on replacing these libraries with compatible modified versions, or on reverse engineering needed to debug modifications to LGPL-covered libraries. Keep ABI-compatible versions and architectures together. For a rebuild, unpack the JustDLSS5 source, install Python 3.12.10 x64, install `requirements-desktop.txt`, and run `python tools/build_desktop.py`. To use modified Qt/PySide, build matching bindings and install them into that build environment first. Dependency sources include their own build instructions. No activation key is required.
 
 License references:
 

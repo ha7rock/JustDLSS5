@@ -81,8 +81,8 @@ def make_zip(folder, output):
 
 
 def main():
-    if platform.python_version() != "3.12.14":
-        raise SystemExit("Release source materials require Python 3.12.14")
+    if platform.python_version() not in ("3.12.10", "3.12.14"):
+        raise SystemExit("Missing pinned Python source materials")
     for name in ("PySide6-Essentials", "shiboken6"):
         if distribution(name).version != "6.11.2":
             raise SystemExit(f"Update the pinned source materials for {name}")
@@ -99,7 +99,8 @@ def main():
     openssl_version = ssl.OPENSSL_VERSION.split()[1]
     if not any(s["name"] == "openssl" and s["version"] == openssl_version for s in sources):
         raise SystemExit(f"Missing corresponding OpenSSL source: {openssl_version}")
-    sources = [s for s in sources if s["name"] != "openssl" or s["version"] == openssl_version]
+    sources = [s for s in sources if (s["name"] != "openssl" or s["version"] == openssl_version)
+               and (s["name"] != "cpython" or s["version"] == platform.python_version())]
     archives = []
     for source in sources:
         archive = fetch(source, cache)
