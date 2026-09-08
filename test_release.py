@@ -20,7 +20,7 @@ class ReleaseTests(unittest.TestCase):
             root = Path(folder)
             archive = root / "source.tar.gz"
             with tarfile.open(archive, "w:gz") as tar:
-                for name in ("root/LICENSE", "root/dependency/LICENSE", "root/program.py"):
+                for name in ("root/LICENSE", "root/dependency/LICENSE", "root/LICENSES/LGPL-3.0-only.txt", "root/program.py"):
                     content = b"original notice"
                     entry = tarfile.TarInfo(name)
                     entry.size = len(content)
@@ -30,8 +30,9 @@ class ReleaseTests(unittest.TestCase):
                 link.linkname = "../../outside"
                 tar.addfile(link)
             output = root / "notices"
-            self.assertEqual(collect_notices(archive, output), 2)
+            self.assertEqual(collect_notices(archive, output), 3)
             self.assertEqual((output / "dependency/LICENSE").read_bytes(), b"original notice")
+            self.assertEqual((output / "LICENSES/LGPL-3.0-only.txt").read_bytes(), b"original notice")
             self.assertFalse((output / "program.py").exists())
             self.assertFalse((output / "linked-LICENSE").exists())
 

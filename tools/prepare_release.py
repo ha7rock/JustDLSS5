@@ -58,6 +58,7 @@ def collect_notices(archive, destination):
             relative = license_path(member.name)
             name = relative.name.lower()
             is_notice = any(word in name for word in ("license", "licence", "copying", "copyright", "notice"))
+            is_notice |= any(part.lower() in ("licenses", "licences") for part in relative.parts)
             is_notice |= name == "qt_attribution.json" or ("3rdparty" in relative.parts and name.startswith("readme"))
             if not is_notice:
                 continue
@@ -105,6 +106,9 @@ def main():
         count = collect_notices(archive, legal / source["name"])
         archives.append(archive)
         print(f"{source['name']}: {count} license/attribution files", flush=True)
+    for name in ("LGPL-3.0-only.txt", "GPL-3.0-only.txt"):
+        if not (legal / "qtbase/LICENSES" / name).is_file():
+            raise SystemExit(f"Required Qt license missing: {name}")
     for name in ("PySide6-Essentials", "shiboken6", "pyinstaller"):
         package = distribution(name)
         for file in package.files or ():
