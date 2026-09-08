@@ -7,19 +7,19 @@
 <p align="center"><strong>DLSS 5，少一点折腾。</strong></p>
 
 <p align="center">
-  Windows 桌面应用：扫描游戏、安装画面组件、<br>
-  管理 DLSS 5 相关配置 — 独立 Qt（PySide）界面，中英双语。
+  Windows 上用的桌面工具：扫游戏、装画面组件、<br>
+  管 DLSS 5 相关配置。界面是 Qt（PySide），中文英文都能切。
 </p>
 
 <p align="center">
-  <strong>v0.2.4 · 玩家测试版</strong> · 安装引擎钉死 DLSS5-Autopilot <strong>v1.7.1</strong>
+  <strong>v0.2.4 · 玩家测试版</strong> · 安装核心来自 DLSS5-Autopilot <strong>v1.7.1</strong>
 </p>
 
 <p align="center">
   <a href="./README.md">English</a> ·
   <a href="#下载">下载</a> ·
-  <a href="#功能">功能</a> ·
-  <a href="#测试边界">边界</a> ·
+  <a href="#能做什么">功能</a> ·
+  <a href="#先看清楚">注意</a> ·
   <a href="#致谢与许可">许可</a>
 </p>
 
@@ -35,18 +35,18 @@
 
 ## 下载
 
-**玩家：**到 [Releases](https://github.com/ha7rock/JustDLSS5/releases) 下载 Windows x64 包（`JustDLSS5-v0.2.4-windows-x64.zip`）。
+去 [Releases](https://github.com/ha7rock/JustDLSS5/releases) 下 Windows x64 包：`JustDLSS5-v0.2.4-windows-x64.zip`。
 
-1. **完整解压**到可写目录。
-2. 运行 `JustDLSS5.exe`。保留同目录 `_internal` 与许可文件；不要只拷一个 EXE。
-3. 便携包**不需要**自行安装 Python。
-4. 可选核对：`SHA256SUMS.txt` — PowerShell：`Get-FileHash <文件> -Algorithm SHA256`。
+1. 整包解压到一个能写的文件夹。
+2. 运行 `JustDLSS5.exe`。同目录的 `_internal` 和许可文件别删，别只拷一个 EXE。
+3. 这个便携包不用单独装 Python。
+4. 想核对文件可看 `SHA256SUMS.txt`。PowerShell：`Get-FileHash <文件> -Algorithm SHA256`。
 
-同版本还提供：`BUILD-INFO.json`（构建记录）、`JustDLSS5-v0.2.4-source-materials.zip`（应用与依赖源码材料）。
+同版本还有：`BUILD-INFO.json`（这次是怎么打出来的）、`JustDLSS5-v0.2.4-source-materials.zip`（程序和依赖的对应源码）。
 
-玩家说明：[docs/TESTING-PREVIEW.zh-CN.md](docs/TESTING-PREVIEW.zh-CN.md) · 反馈：[提交 Issue](https://github.com/ha7rock/JustDLSS5/issues/new?template=bug-report.yml)（或应用内「反馈问题」）。
+怎么测、注意什么：[玩家测试说明](docs/TESTING-PREVIEW.zh-CN.md)。有问题：[提 Issue](https://github.com/ha7rock/JustDLSS5/issues/new?template=bug-report.yml)，或用应用里的「反馈问题」。
 
-> 这是**社区玩家测试版**，不是稳定版，**与 NVIDIA 无隶属关系**。
+> 社区做的玩家测试版，不是稳定版，也跟 NVIDIA 没关系。
 
 ---
 
@@ -56,91 +56,91 @@
 | --- | --- |
 | ![游戏库 · 中文](docs/images/library.zh-CN.png) | ![游戏库 · 英文](docs/images/library.en.png) |
 
-*游戏库截图使用示意 mock 数据，非真实库存。*
+*图里的游戏是演示数据，不是真实库存。*
 
 ---
 
-## 为什么是 JustDLSS5
+## 为什么做这个
 
-手工配 DLSS 5 相关组件：找包、对 API、改路径，容易踩坑。上游 [DLSS5-Autopilot](https://github.com/Kizzuwatnaa/DLSS5-Autopilot) 已沉淀安装业务逻辑 — JustDLSS5 用独立桌面 UI 包住它，扫库、选路线、预览、维护，少在命令行里耗。
+自己配 DLSS 5 相关组件，经常要找包、对 API、改路径，很容易踩坑。[DLSS5-Autopilot](https://github.com/Kizzuwatnaa/DLSS5-Autopilot) 那边已经把安装流程做好了；JustDLSS5 在上面做了独立桌面界面，扫库、选方案、预览变更、卸载还原，都可以在窗口里完成。
 
-| | 手工配置 | DLSS5-Autopilot | **JustDLSS5** |
+| | 自己折腾 | DLSS5-Autopilot | **JustDLSS5** |
 |---|---|---|---|
-| 界面 | 无 | 上游工具流 | 独立 Qt（PySide）桌面应用 |
-| 语言 | — | 上游 | 中英双语 UI |
-| 游戏库 | 自己找 | 上游流程 | 扫描本机、手动加目录、看安装状态 |
-| 安装引擎 | 自己搞 | 上游 | 钉死 Autopilot **v1.7.1**（`core/`） |
+| 界面 | 没有 | 上游自己的工具 | 独立 Qt（PySide）桌面程序 |
+| 语言 | — | 上游 | 中文 / 英文 |
+| 游戏库 | 自己找 | 上游流程 | 扫本机、手动加目录、看安装状态 |
+| 安装核心 | 自己搞 | 上游 | 目前用 Autopilot **v1.7.1**（`core/`） |
 | 维护 | 手工 | 上游 | 预览、诊断、卸载、还原备份 |
-| 分发 | — | 上游 | 玩家测试 ZIP + 摘要 + 许可／源码材料 |
+| 下载 | — | 上游 | 玩家测试 ZIP、校验摘要、许可和源码包 |
 
 ---
 
-## 功能
+## 能做什么
 
-**安装与游戏库**
-- 检测游戏环境，给出安装路线
-- 下载／配置组件；应用前可预览
-- 扫描本机或手动加目录；查看安装状态
+**安装和游戏库**
+- 识别游戏环境，给出可装方案
+- 下载并配置组件；动手前可以先预览会改什么
+- 扫描本机游戏，或自己加目录；看看哪些已经装过
 
-**档案与维护**
-- 调参；保存／载入档案
-- 诊断、卸载、从备份还原
+**配置和维护**
+- 调参数，保存和载入配置
+- 出问题可以诊断；也能卸载，或从备份还原
 
-**按游戏控制**
-- 手动选择图形 API，并按游戏记住
-- 适用时提供 FSR 帧生成、RTX 40 MFG 相关控制
+**按游戏记**
+- 图形 API 可以手动选，并按游戏记住
+- 条件合适时，有 FSR 补帧、RTX 40 MFG 相关选项
 
-**桌面体验**
-- 中英界面；可缩放窗口
-- 后台任务在触发按钮上显示进度／加载
-- 应用内反馈表单（预填版本与所选游戏）
-- 更新检查会打开发行页 — **不会**自动覆盖程序
+**用起来**
+- 中文 / 英文界面，窗口能缩放
+- 后台任务会在你点的那个按钮上转进度
+- 应用里能直接反馈问题（会带上版本和当前游戏）
+- 检查更新只会打开发布页，**不会**自动覆盖程序
 
-**扩展**
-- 屏幕／窗口捕获（与摄像头共用开始／停止生命周期）
-- 视频增强工具 · RTX Remix 工具
+**另外还有**
+- 屏幕 / 窗口捕获（和摄像头共用开始、停止）
+- 视频增强、RTX Remix 相关工具
 
-**安全**
-- 反作弊游戏在安装或批量重装前需**显式确认**（默认取消）
-- 警告**不构成**「该游戏一定允许注入」的保证
+**安全相关**
+- 带反作弊的游戏，安装或批量重装前会再问一次（默认是取消）
+- 就算没弹警告，也不代表这个游戏一定允许装插件
 
 ---
 
-## 与 DLSS5-Autopilot 对比
+## 和 DLSS5-Autopilot 差在哪
 
 | | DLSS5-Autopilot | JustDLSS5 |
 |---|---|---|
-| 角色 | 上游安装引擎／工具 | 在其逻辑之上的桌面产品 UI |
-| 引擎 | 上游发版 | 钉死 **v1.7.1**（`backend-version.json`） |
-| 界面／语言 | 上游 | 独立 Qt · 中英双语 |
-| 玩家包装 | 上游项目 | 便携 ZIP、SHA-256、构建元数据、许可与源码材料 |
-| 许可 | 上游 | JustDLSS5 项目代码 MIT；保留上游版权 |
+| 做什么 | 上游的安装引擎 / 工具 | 在这套逻辑上的桌面界面 |
+| 版本 | 跟着上游发 | 现在固定在 **v1.7.1**（见 `backend-version.json`） |
+| 界面 | 上游 | 自己做的 Qt，中英双语 |
+| 给玩家的包 | 上游项目 | 便携 ZIP、SHA-256、构建信息、许可和源码 |
+| 许可 | 上游 | JustDLSS5 代码是 MIT；上游版权照样保留 |
 
-业务逻辑在 `core/`。详见 [docs/UPSTREAM-AND-SOURCES.zh-CN.md](docs/UPSTREAM-AND-SOURCES.zh-CN.md)、[docs/UPSTREAM_README.md](docs/UPSTREAM_README.md)。本预览**不含**上游 v1.7.2 新能力。
-
----
-
-## 测试边界
-
-- 有界面／衔接／命令行／打包启动的自动检查。**不提供「已兼容游戏名单」** — 没有公开记录的组合＝未验证。
-- 首轮优先**离线单机**。先备份存档与重要配置。工具的组件备份不能代替完整备份。
-- 反作弊检测不完整；**没警告 ≠ 安全**。不要用联网／反作弊游戏试探封禁风险。
-- 组件下载依赖第三方站点。下载失败 ≠ 游戏不兼容 — 请保留任务日志。
-- 程序**未做**商业代码签名。摘要只核对文件一致性，不是安全认证。
-- 预期有毛刺；请用可复现步骤反馈。
-
-完整说明：[docs/TESTING-PREVIEW.zh-CN.md](docs/TESTING-PREVIEW.zh-CN.md)。
-
-**显卡现实** *（据 `docs/` 中上游／社区说明归纳，非本仓库基准测试）*
-- 上游工具链存在 RTX 50／40／20–30 社区路径
-- GTX 及低于 RTX 20 **无法运行**
-- 非官方早期生态，组件会变；此处不写帧数承诺
+安装相关代码在 `core/`。细节见 [上游与来源](docs/UPSTREAM-AND-SOURCES.zh-CN.md)、[上游 README](docs/UPSTREAM_README.md)。这个测试版**还没有**上游 v1.7.2 的新东西。
 
 ---
 
-## 从源码构建
+## 先看清楚
 
-给贡献者（Windows x64、Python 3.12）：
+- 界面、衔接、命令行、打包启动有自动检查。**没有「已兼容游戏名单」**；没写过的组合，就当没测过。
+- 第一次建议先拿**离线单机**试。装之前自己备份存档和重要配置。工具做的组件备份，不能当完整备份用。
+- 反作弊提示不完整；**没警告不等于安全**。别拿联网或反作弊游戏去试会不会封号。
+- 组件要从第三方站点下。下失败了，不一定是游戏不兼容，把任务日志留着。
+- 程序还没做商业签名。SHA-256 只说明文件没下坏，不代表「安全认证」。
+- 测试版，难免有小问题。能复现的话，麻烦按步骤反馈。
+
+更细的说明：[玩家测试说明](docs/TESTING-PREVIEW.zh-CN.md)。
+
+**显卡**（按 `docs/` 里上游 / 社区说法整理，不是我们测出来的帧数）
+- 上游工具对 RTX 50 / 40 / 20–30 有对应路径
+- GTX，以及比 RTX 20 更早的卡，跑不了
+- 这是非官方、还在变的生态；这里不写「能提升多少帧」
+
+---
+
+## 从源码跑
+
+给要改代码的人（Windows x64、Python 3.12）：
 
 ```bat
 python -m venv .venv
@@ -153,7 +153,7 @@ python autopilot_desktop.py
 build-desktop.bat
 ```
 
-产物：`dist/v0.2.4/JustDLSS5/JustDLSS5.exe` — 请保留同目录 `_internal`。
+打出来在：`dist/v0.2.4/JustDLSS5/JustDLSS5.exe`，旁边的 `_internal` 要留着。
 
 维护说明：[docs/MAINTAINING.zh-CN.md](docs/MAINTAINING.zh-CN.md)。
 
@@ -162,24 +162,24 @@ build-desktop.bat
 ## 致谢与许可
 
 **致谢**
-- 安装引擎／业务逻辑：[Kizzuwatnaa/DLSS5-Autopilot](https://github.com/Kizzuwatnaa/DLSS5-Autopilot)
-- 项目与上游涉及的生态组件，包括 ReShade、RenoDX、Feeder、OptiScaler、DXVK、RTX Remix 等 — 详见 [docs/THIRD-PARTY-NOTICES.md](docs/THIRD-PARTY-NOTICES.md)、[docs/UPSTREAM-AND-SOURCES.zh-CN.md](docs/UPSTREAM-AND-SOURCES.zh-CN.md)
+- 安装核心：[Kizzuwatnaa/DLSS5-Autopilot](https://github.com/Kizzuwatnaa/DLSS5-Autopilot)
+- 还会用到生态里的组件，比如 ReShade、RenoDX、Feeder、OptiScaler、DXVK、RTX Remix 等。名单见 [第三方声明](docs/THIRD-PARTY-NOTICES.md)、[上游与来源](docs/UPSTREAM-AND-SOURCES.zh-CN.md)
 
 **许可**
-- JustDLSS5 项目代码：**MIT**
-- 源自 Autopilot 的逻辑请保留上游版权
-- 第三方组件／NVIDIA 运行时／游戏 mod：各自许可 — 源码仓不附带这些二进制；便携发行包另附依赖许可材料
+- JustDLSS5 自己的代码：**MIT**
+- 从 Autopilot 来的部分，请保留上游版权
+- 第三方组件、NVIDIA 运行时、游戏 mod 各有各的许可。源码仓库不带这些二进制；便携包里另有依赖许可说明
 
 ---
 
 ## 文档
 
-- [docs/TESTING-PREVIEW.zh-CN.md](docs/TESTING-PREVIEW.zh-CN.md) — 玩家测试说明
-- [docs/RELEASE-v0.2.4.md](docs/RELEASE-v0.2.4.md) — v0.2.4 发行说明
-- [docs/THIRD-PARTY-NOTICES.md](docs/THIRD-PARTY-NOTICES.md) — 第三方声明
-- [docs/MAINTAINING.zh-CN.md](docs/MAINTAINING.zh-CN.md) — 维护说明
-- [docs/UPSTREAM-AND-SOURCES.zh-CN.md](docs/UPSTREAM-AND-SOURCES.zh-CN.md) · [docs/UPSTREAM_README.md](docs/UPSTREAM_README.md)
+- [玩家测试说明](docs/TESTING-PREVIEW.zh-CN.md)
+- [v0.2.4 说明](docs/RELEASE-v0.2.4.md)
+- [第三方声明](docs/THIRD-PARTY-NOTICES.md)
+- [维护说明](docs/MAINTAINING.zh-CN.md)
+- [上游与来源](docs/UPSTREAM-AND-SOURCES.zh-CN.md) · [上游 README](docs/UPSTREAM_README.md)
 
 ---
 
-<p align="center">JustDLSS5 · v0.2.4 玩家测试版 · MIT · 社区工具，与 NVIDIA 无关</p>
+<p align="center">JustDLSS5 · v0.2.4 玩家测试版 · MIT · 社区工具，跟 NVIDIA 没关系</p>
