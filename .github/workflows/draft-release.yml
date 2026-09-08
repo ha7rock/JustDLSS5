@@ -36,16 +36,24 @@ jobs:
           assert run['head_repository']['full_name'] == os.environ['GH_REPO']
           PY
           gh run download "$CANDIDATE_RUN_ID" --name JustDLSS5-release-candidate --dir candidate
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          matches = list(Path('candidate').rglob('SHA256SUMS.txt'))
+          assert len(matches) == 1, 'Expected exactly one release candidate'
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              f.write(f'CANDIDATE_DIR={matches[0].resolve().parent}\n')
+          PY
       - name: Verify checksums and prepare notes
         shell: bash
         run: |
           set -euo pipefail
-          cd candidate
+          cd "$CANDIDATE_DIR"
           sha256sum -c SHA256SUMS.txt
           python - <<'PY'
           import json, os, re, zipfile
           from pathlib import Path
-          run = json.loads(Path('../run.json').read_text())
+          run = json.loads((Path(os.environ['GITHUB_WORKSPACE']) / 'run.json').read_text())
           info = json.loads(Path('BUILD-INFO.json').read_text())
           assert info['commit'] == run['head_sha']
           assert str(info['workflow']) == os.environ['CANDIDATE_RUN_ID']
@@ -64,6 +72,6 @@ jobs:
           set -euo pipefail
           gh api "repos/$GH_REPO/contents/docs/RELEASE-v$VERSION.md?ref=$COMMIT" --jq .content | base64 --decode > notes.md
           printf '\nBuild record: https://github.com/%s/actions/runs/%s\n' "$GH_REPO" "$CANDIDATE_RUN_ID" >> notes.md
-          gh release create "v$VERSION" candidate/*.zip candidate/SHA256SUMS.txt candidate/BUILD-INFO.json \
+          gh release create "v$VERSION" "$CANDIDATE_DIR"/*.zip "$CANDIDATE_DIR/SHA256SUMS.txt" "$CANDIDATE_DIR/BUILD-INFO.json" \
             --draft --prerelease --target "$COMMIT" \
             --title "JustDLSS5 v$VERSION · 玩家测试版" --notes-file notes.md
