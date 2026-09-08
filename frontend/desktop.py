@@ -1017,14 +1017,17 @@ class MainWindow(QMainWindow):
         return scroller(page)
 
     def open_update_guide(self):
-        path = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent)) / "README.zh-CN.md"
+        path = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent)) / "docs/MAINTAINING.zh-CN.md"
         if path.is_file():
             self.show_text(self.t("更新说明", "Update guide"), path.read_text(encoding="utf8"))
 
     def report_problem(self):
         fields = feedback.report_fields(update.VERSION, self.current, self.inspection,
             self.route_combo.currentData() or "" if self.current else "")
-        preview = "\n\n".join(f"{key}: {value}" for key, value in fields.items())
+        titles = {"versions": self.t("版本", "Versions"), "platform": "Windows",
+                  "game": self.t("游戏", "Game"), "store": self.t("游戏来源", "Store"),
+                  "configuration": self.t("配置", "Configuration"), "hardware": self.t("显卡与驱动", "GPU and driver")}
+        preview = "\n\n".join(f"{titles[key]}: {value}" for key, value in fields.items())
         dialog = QMessageBox(self)
         dialog.setWindowTitle(self.t("反馈问题", "Report a problem"))
         dialog.setText(self.t("将在 GitHub 打开反馈表单，预填以下信息。截图和日志由你选择添加，提交前可修改。私有仓库需要访问权限。",

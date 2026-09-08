@@ -33,7 +33,7 @@ from pathlib import Path
 import os, sys
 ROOT = Path(''' + repr(str(ROOT)) + ''')
 a = Analysis([str(ROOT / "autopilot_desktop.py")], pathex=[str(ROOT)],
-    binaries=[], datas=[(str(ROOT / "README.zh-CN.md"), "."), (str(ROOT / "frontend/chevron.svg"), "frontend"), (str(ROOT / "frontend/check.svg"), "frontend"), (str(ROOT / "frontend/justdlss5.ico"), "frontend")],
+    binaries=[], datas=[(str(ROOT / "docs/MAINTAINING.zh-CN.md"), "docs"), (str(ROOT / "frontend/chevron.svg"), "frontend"), (str(ROOT / "frontend/check.svg"), "frontend"), (str(ROOT / "frontend/justdlss5.ico"), "frontend")],
     hiddenimports=[], hookspath=[], runtime_hooks=[],
     excludes=["tkinter", "core.gui", "core.compareui", "core.remixui"], noarchive=False)
 # Some development runtimes augment DLL search even after PATH is sanitized.
