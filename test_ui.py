@@ -503,9 +503,14 @@ class DesktopTests(unittest.TestCase):
             return self.service.entries
         with patch.object(self.service, "scan", side_effect=scan) as worker:
             try:
-                self.window.scan_button.click()
+                self.window.empty_scan_button.click()
                 self.assertFalse(self.window.scan_button.isEnabled())
                 self.assertIn("扫描中", self.window.scan_button.text())
+                self.assertFalse(self.window.empty_scan_button.isEnabled())
+                self.assertIn("扫描中", self.window.empty_scan_button.text())
+                self.assertTrue(self.window.empty_scan_button._loading_timer.isActive())
+                self.window.scan_button.click()
+                self.window.empty_scan_button.click()
                 self.assertTrue(self.window.scan_feedback.isVisible())
                 angle = self.window.scan_button._angle
                 QTest.qWait(100)
@@ -517,6 +522,8 @@ class DesktopTests(unittest.TestCase):
             self.assertEqual(worker.call_count, 1)
         self.assertTrue(self.window.scan_button.isEnabled())
         self.assertIsNone(self.window.scan_button._loading_timer)
+        self.assertTrue(self.window.empty_scan_button.isEnabled())
+        self.assertIsNone(self.window.empty_scan_button._loading_timer)
         self.assertIn("3", self.window.scan_feedback.text())
 
     def test_scan_failure_preserves_library_and_allows_retry(self):
@@ -528,6 +535,8 @@ class DesktopTests(unittest.TestCase):
         self.assertIn("扫描失败", self.window.scan_feedback.text())
         self.assertTrue(self.window.scan_button.isEnabled())
         self.assertIsNone(self.window.scan_button._loading_timer)
+        self.assertTrue(self.window.empty_scan_button.isEnabled())
+        self.assertIsNone(self.window.empty_scan_button._loading_timer)
         self.window.scan()
         self.drain()
         self.assertIn("扫描完成", self.window.scan_feedback.text())
@@ -539,6 +548,52 @@ class DesktopTests(unittest.TestCase):
         self.assertIn("未找到游戏", self.window.scan_feedback.text())
         self.assertIn("手动添加", self.window.scan_feedback.text())
         self.assertTrue(self.window.scan_button.isEnabled())
+
+    def test_install_button_has_progress_and_recovers_after_error(self):
+        self.select_game()
+        gate = threading.Event()
+        def fail(*args):
+            gate.wait(2)
+            raise RuntimeError("install fixture failure")
+        with patch.object(self.service, "install", side_effect=fail) as worker:
+            try:
+                self.window.install_button.click()
+                self.assertFalse(self.window.install_button.isEnabled())
+                self.assertTrue(self.window.install_button._loading_timer.isActive())
+                self.window.install_button.click()
+            finally:
+                gate.set()
+            self.drain()
+            self.assertEqual(worker.call_count, 1)
+        self.assertTrue(self.window.install_button.isEnabled())
+        self.assertIsNone(self.window.install_button._loading_timer)
+        self.assertIn("失败", self.window.status.text())
+
+    def test_inspection_failure_ends_pending_message(self):
+        with patch.object(self.service, "inspect", side_effect=RuntimeError("fixture failure")):
+            self.window._scanned(self.service.entries)
+            self.window.table.selectRow(0)
+            self.drain()
+        self.assertIn("检查失败", self.window.compatibility.text())
+        self.assertFalse(self.window.install_button.isEnabled())
+        self.assertIsNone(self.window.inspection)
+
+    def test_update_check_error_restores_button_and_retry(self):
+        from frontend import updates
+        with patch.object(updates, "check", side_effect=RuntimeError("fixture failure")):
+            self.window.update_check_button.click()
+            self.assertFalse(self.window.update_check_button.isEnabled())
+            self.assertFalse(self.window.language.isEnabled())
+            self.assertTrue(self.window.update_check_button._loading_timer.isActive())
+            self.drain()
+        self.assertFalse(self.window.update_check_running)
+        self.assertTrue(self.window.update_check_button.isEnabled())
+        self.assertIsNone(self.window.update_check_button._loading_timer)
+        self.assertIn("失败", self.window.product_update_status.text())
+        with patch.object(updates, "check", return_value=updates.Result("current")):
+            self.window.update_check_button.click()
+            self.drain()
+        self.assertIn("最新版本", self.window.product_update_status.text())
 
 if __name__ == "__main__":
     unittest.main()

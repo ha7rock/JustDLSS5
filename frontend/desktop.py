@@ -51,7 +51,15 @@ def button(text, callback, kind=""):
     widget.setToolTip(text)
     widget.setObjectName(kind)
     widget.setCursor(Qt.CursorShape.PointingHandCursor)
-    widget.clicked.connect(callback)
+    def activate(checked=False):
+        window = widget.window()
+        previous = getattr(window, "_action_source", None)
+        window._action_source = widget
+        try:
+            callback()
+        finally:
+            window._action_source = previous
+    widget.clicked.connect(activate)
     return widget
 
 
@@ -137,6 +145,7 @@ class MainWindow(QMainWindow):
         self.jobs.completed.connect(self._completed)
         self.jobs.events.connect(self._events)
         self.callbacks = {}
+        self.action_controls = {}
         self.update_check_running = False
         self.busy_job = None
         self.scan_job = None
@@ -320,7 +329,9 @@ class MainWindow(QMainWindow):
         self.empty_description.setAlignment(Qt.AlignmentFlag.AlignCenter)
         empty_layout.addWidget(self.empty_description)
         empty_layout.addSpacing(12)
-        empty_layout.addWidget(button(self.t("扫描游戏", "Scan games"), self.scan, "primary"), alignment=Qt.AlignmentFlag.AlignHCenter)
+        self.empty_scan_button = button(self.t("扫描游戏", "Scan games"), self.scan, "primary")
+        self.empty_scan_button.setMinimumWidth(self.scan_button.minimumWidth())
+        empty_layout.addWidget(self.empty_scan_button, alignment=Qt.AlignmentFlag.AlignHCenter)
         empty_layout.addStretch()
         self.library_state.addWidget(empty)
         self.library_split.addWidget(self.library_state)
@@ -526,11 +537,21 @@ class MainWindow(QMainWindow):
             self.selection_generation += 1
             self.detail_stack.setCurrentIndex(0)
 
-    def _submit(self, work, done=None, busy=False, title=""):
+    def _submit(self, work, done=None, busy=False, title="", controls=(), failed=None):
         if busy and self.busy_job is not None:
+            self.status.setText(self.t("已有任务正在运行，请稍候。", "A task is already running. Please wait."))
             return None
         job_id = self.jobs.submit(work)
-        self.callbacks[job_id] = (done, busy, title)
+        self.language.setEnabled(False)
+        self.callbacks[job_id] = (done, busy, title, failed)
+        source = getattr(self, "_action_source", None)
+        controls = tuple(controls) or ((source,) if isinstance(source, Button) else ())
+        self.action_controls[job_id] = controls
+        for control in controls:
+            control.setEnabled(False)
+            control.set_loading(True)
+        if controls:
+            self.status.setText(title or self.t("正在处理…", "Working…"))
         if busy:
             self.busy_job = job_id
             self._set_busy(True)
@@ -540,16 +561,20 @@ class MainWindow(QMainWindow):
         return job_id
 
     def _completed(self, job_id, result, error):
+        controls = self.action_controls.pop(job_id, ())
+        for control in controls:
+            control.set_loading(False)
+            control.setEnabled(True)
         was_scan = job_id == self.scan_job
         if was_scan:
             self.scan_job = None
-            self.scan_button.set_loading(False)
-            self.scan_button.setText(self.t("重新扫描", "Rescan"))
-            self.scan_button.setToolTip(self.t("重新扫描游戏库", "Rescan the game library"))
+            for control in (self.scan_button, self.empty_scan_button):
+                control.setText(self.t("重新扫描", "Rescan"))
+                control.setToolTip(self.t("重新扫描游戏库", "Rescan the game library"))
             if error:
                 self.scan_feedback.setText(self.t("扫描失败，已保留原游戏列表。可重试，或在任务与日志中查看原因。", "Scan failed. Your previous library is unchanged. Retry or check Activity for details."))
         self.language.setEnabled(not self.jobs.active)
-        done, busy, title = self.callbacks.pop(job_id, (None, False, ""))
+        done, busy, title, failed = self.callbacks.pop(job_id, (None, False, "", None))
         if busy:
             self.busy_job = None
             self._set_busy(False)
@@ -557,11 +582,13 @@ class MainWindow(QMainWindow):
             self.progress.setValue(0 if error else 100)
         if error:
             self._append_log(error[1])
+            if failed:
+                failed(error[0])
             self.status.setText(self.t("操作失败 · 查看任务日志", "Failed · see Activity"))
-            if busy:
+            if busy or controls:
                 self.show_text(self.t("操作未完成", "Operation failed"), error[0])
             return
-        if busy:
+        if busy or controls:
             self.status.setText(self.t("●  已完成", "●  Complete"))
         if done:
             done(result)
@@ -589,6 +616,7 @@ class MainWindow(QMainWindow):
 
     def _set_busy(self, busy):
         self.scan_button.setEnabled(not busy)
+        self.empty_scan_button.setEnabled(not busy)
         self.add_button.setEnabled(not busy)
         self.language.setEnabled(not self.jobs.active)
         self.detail_stack.widget(1).setEnabled(not busy)
@@ -603,11 +631,12 @@ class MainWindow(QMainWindow):
             return
         self.scan_feedback.setText(self.t("正在扫描本地游戏，完成后会更新列表。", "Scanning local games. The library will update when finished."))
         self.scan_feedback.show()
-        self.scan_button.setText(self.t("扫描中…", "Scanning…"))
-        self.scan_button.setToolTip(self.t("正在扫描，请稍候。", "Scan in progress. Please wait."))
-        self.scan_button.set_loading(True)
+        for control in (self.scan_button, self.empty_scan_button):
+            control.setText(self.t("扫描中…", "Scanning…"))
+            control.setToolTip(self.t("正在扫描，请稍候。", "Scan in progress. Please wait."))
         self.scan_job = self._submit(self.service.scan, self._scan_finished, busy=True,
-            title=self.t("正在扫描本地游戏…", "Scanning local libraries…"))
+            title=self.t("正在扫描本地游戏…", "Scanning local libraries…"),
+            controls=(self.scan_button, self.empty_scan_button))
 
     def _scan_finished(self, entries):
         self._scanned(entries)
@@ -667,7 +696,13 @@ class MainWindow(QMainWindow):
         self.preview_button.setEnabled(False)
         self.more_button.setEnabled(False)
         self._submit(lambda emit: self.service.inspect(entry),
-                     lambda inspection: self._inspected(inspection, generation))
+                     lambda inspection: self._inspected(inspection, generation),
+                     failed=lambda error: self._inspection_failed(generation))
+
+    def _inspection_failed(self, generation):
+        if generation == self.selection_generation:
+            self.compatibility.setText(self.t("兼容性检查失败。请重新选择游戏重试，或查看任务日志。",
+                "Compatibility check failed. Select the game again to retry, or check Activity."))
 
     def _inspected(self, inspection, generation):
         if generation != self.selection_generation:
@@ -1003,7 +1038,7 @@ class MainWindow(QMainWindow):
         page = QWidget()
         layout = column(page, 28, 18)
         header = self._page_header(layout, self.t("任务与日志", "Activity"), self.t("查看任务进度、结果和错误日志。", "View task progress, results and errors."))
-        header.addWidget(button(self.t("复制日志", "Copy log"), lambda: QApplication.clipboard().setText(self.activity_log.toPlainText())))
+        header.addWidget(button(self.t("复制日志", "Copy log"), self.copy_log))
         self.activity_title = label(self.t("暂无运行中的任务", "No task running"), "subheading")
         layout.addWidget(self.activity_title)
         self.progress = QProgressBar()
@@ -1017,6 +1052,10 @@ class MainWindow(QMainWindow):
         self.activity_log.setPlaceholderText(self.t("暂无日志。", "No logs yet."))
         layout.addWidget(self.activity_log, 1)
         return page
+
+    def copy_log(self):
+        QApplication.clipboard().setText(self.activity_log.toPlainText())
+        self.status.setText(self.t("日志已复制。", "Log copied."))
 
     def _settings_page(self):
         page = QWidget()
@@ -1033,7 +1072,8 @@ class MainWindow(QMainWindow):
         self.preview_update_check.setChecked(bool(prefs.get("product_update_preview", False)))
         self.preview_update_check.toggled.connect(lambda checked: prefs.set_("product_update_preview", checked))
         layout.addWidget(self.preview_update_check)
-        layout.addWidget(button(self.t("检查应用更新", "Check for updates"), self.check_product_update), alignment=Qt.AlignmentFlag.AlignLeft)
+        self.update_check_button = button(self.t("检查应用更新", "Check for updates"), self.check_product_update)
+        layout.addWidget(self.update_check_button, alignment=Qt.AlignmentFlag.AlignLeft)
         card = QFrame()
         card.setObjectName("card")
         content = column(card, 24, 12)
@@ -1052,6 +1092,9 @@ class MainWindow(QMainWindow):
         path = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent)) / "docs/MAINTAINING.zh-CN.md"
         if path.is_file():
             self.show_text(self.t("更新说明", "Update guide"), path.read_text(encoding="utf8"))
+        else:
+            self.show_text(self.t("无法打开更新说明", "Could not open update guide"),
+                self.t("未找到说明文件，请查看仓库文档。", "The guide is missing. See the repository documentation."))
 
     def report_problem(self):
         fields = feedback.report_fields(update.VERSION, self.current, self.inspection,
@@ -1092,7 +1135,12 @@ class MainWindow(QMainWindow):
                 if not automatic and QMessageBox.question(self, self.t("发现新版本", "Update available"),
                     self.t(f"打开 {result.version} 的发行页面？", f"Open the release page for {result.version}?")) == QMessageBox.StandardButton.Yes:
                     QDesktopServices.openUrl(QUrl(result.url))
-        self._submit(lambda emit: updates.check(preview), done)
+        def check(emit):
+            try:
+                return updates.check(preview)
+            except Exception:
+                return updates.Result("unavailable")
+        self._submit(check, done, controls=(self.update_check_button,))
 
     def update_all(self):
         entries = [entry for entry in self.model.entries if entry.installed]
