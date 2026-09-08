@@ -1,11 +1,45 @@
 """Shared desktop controls with consistent popup geometry."""
-from PySide6.QtCore import QPoint, QRect, QSize, Qt
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QApplication, QComboBox, QFrame, QListView,
     QPushButton, QSlider, QStyledItemDelegate, QStyle, QStyleOptionButton,
     QStyleOptionComboBox, QStylePainter, QToolTip)
 
 
 class Button(QPushButton):
+    def set_loading(self, loading):
+        if loading:
+            if getattr(self, "_loading_timer", None):
+                return
+            self._idle_icon = self.icon()
+            self._angle = 0
+            self._loading_timer = QTimer(self)
+            self._loading_timer.setInterval(40)
+            self._loading_timer.timeout.connect(self._spin)
+            self._spin()
+            self._loading_timer.start()
+        elif getattr(self, "_loading_timer", None):
+            self._loading_timer.stop()
+            self._loading_timer.deleteLater()
+            self._loading_timer = None
+            self.setIcon(self._idle_icon)
+
+    def _spin(self):
+        ratio = self.devicePixelRatioF()
+        pixmap = QPixmap(round(18 * ratio), round(18 * ratio))
+        pixmap.setDevicePixelRatio(ratio)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor("#b6e477"), 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawArc(3, 3, 12, 12, -self._angle * 16, 260 * 16)
+        painter.end()
+        icon = QIcon()
+        icon.addPixmap(pixmap, QIcon.Mode.Normal)
+        icon.addPixmap(pixmap, QIcon.Mode.Disabled)
+        self.setIcon(icon)
+        self._angle = (self._angle + 16) % 360
+
     def minimumSizeHint(self):
         hint = super().minimumSizeHint()
         return QSize(min(90, hint.width()), hint.height())

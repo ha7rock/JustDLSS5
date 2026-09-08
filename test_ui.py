@@ -496,5 +496,49 @@ class DesktopTests(unittest.TestCase):
             self.assertEqual(restored.game.api, "DX12")
             self.assertEqual(games.api_override(item.game.folder), "")
 
+    def test_scan_feedback_is_immediate_and_prevents_duplicates(self):
+        gate = threading.Event()
+        def scan(emit):
+            gate.wait(2)
+            return self.service.entries
+        with patch.object(self.service, "scan", side_effect=scan) as worker:
+            try:
+                self.window.scan_button.click()
+                self.assertFalse(self.window.scan_button.isEnabled())
+                self.assertIn("扫描中", self.window.scan_button.text())
+                self.assertTrue(self.window.scan_feedback.isVisible())
+                angle = self.window.scan_button._angle
+                QTest.qWait(100)
+                self.assertNotEqual(angle, self.window.scan_button._angle)
+                self.window.scan()
+            finally:
+                gate.set()
+            self.drain()
+            self.assertEqual(worker.call_count, 1)
+        self.assertTrue(self.window.scan_button.isEnabled())
+        self.assertIsNone(self.window.scan_button._loading_timer)
+        self.assertIn("3", self.window.scan_feedback.text())
+
+    def test_scan_failure_preserves_library_and_allows_retry(self):
+        self.window._scanned(self.service.entries)
+        with patch.object(self.service, "scan", side_effect=RuntimeError("test failure")):
+            self.window.scan()
+            self.drain()
+        self.assertEqual(self.window.model.rowCount(), 3)
+        self.assertIn("扫描失败", self.window.scan_feedback.text())
+        self.assertTrue(self.window.scan_button.isEnabled())
+        self.assertIsNone(self.window.scan_button._loading_timer)
+        self.window.scan()
+        self.drain()
+        self.assertIn("扫描完成", self.window.scan_feedback.text())
+
+    def test_empty_scan_explains_next_step(self):
+        with patch.object(self.service, "scan", return_value=[]):
+            self.window.scan()
+            self.drain()
+        self.assertIn("未找到游戏", self.window.scan_feedback.text())
+        self.assertIn("手动添加", self.window.scan_feedback.text())
+        self.assertTrue(self.window.scan_button.isEnabled())
+
 if __name__ == "__main__":
     unittest.main()

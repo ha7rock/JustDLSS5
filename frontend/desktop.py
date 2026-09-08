@@ -139,6 +139,7 @@ class MainWindow(QMainWindow):
         self.callbacks = {}
         self.update_check_running = False
         self.busy_job = None
+        self.scan_job = None
         self.selection_generation = 0
         self.log_lines = []
         self.catalog_loaded = False
@@ -255,8 +256,15 @@ class MainWindow(QMainWindow):
             self.t("扫描游戏，安装或卸载 DLSS 5 组件。", "Scan games and install or remove DLSS 5 components."))
         self.add_button = button(self.t("＋ 添加游戏", "+ Add game"), self.add_game)
         self.scan_button = button(self.t("扫描游戏", "Scan library"), self.scan, "primary")
+        scan_labels = (self.scan_button.text(), self.t("扫描中…", "Scanning…"), self.t("重新扫描", "Rescan"))
+        self.scan_button.setMinimumWidth(max(self.scan_button.fontMetrics().horizontalAdvance(text)
+                                             for text in scan_labels) + 64)
         header.addWidget(self.add_button)
         header.addWidget(self.scan_button)
+        self.scan_feedback = label("", "muted", True)
+        self.scan_feedback.setAccessibleName(self.t("游戏扫描状态", "Game scan status"))
+        self.scan_feedback.hide()
+        layout.addWidget(self.scan_feedback)
         tools = row()
         self.search = QLineEdit()
         self.search.setPlaceholderText(self.t("搜索名称、平台或文件夹…    Ctrl+F", "Search games, platforms or folders…    Ctrl+F"))
@@ -532,6 +540,14 @@ class MainWindow(QMainWindow):
         return job_id
 
     def _completed(self, job_id, result, error):
+        was_scan = job_id == self.scan_job
+        if was_scan:
+            self.scan_job = None
+            self.scan_button.set_loading(False)
+            self.scan_button.setText(self.t("重新扫描", "Rescan"))
+            self.scan_button.setToolTip(self.t("重新扫描游戏库", "Rescan the game library"))
+            if error:
+                self.scan_feedback.setText(self.t("扫描失败，已保留原游戏列表。可重试，或在任务与日志中查看原因。", "Scan failed. Your previous library is unchanged. Retry or check Activity for details."))
         self.language.setEnabled(not self.jobs.active)
         done, busy, title = self.callbacks.pop(job_id, (None, False, ""))
         if busy:
@@ -583,7 +599,23 @@ class MainWindow(QMainWindow):
         self.language.setEnabled(not self.jobs.active)
 
     def scan(self):
-        self._submit(self.service.scan, self._scanned, busy=True, title=self.t("正在扫描本地游戏…", "Scanning local libraries…"))
+        if self.busy_job is not None:
+            return
+        self.scan_feedback.setText(self.t("正在扫描本地游戏，完成后会更新列表。", "Scanning local games. The library will update when finished."))
+        self.scan_feedback.show()
+        self.scan_button.setText(self.t("扫描中…", "Scanning…"))
+        self.scan_button.setToolTip(self.t("正在扫描，请稍候。", "Scan in progress. Please wait."))
+        self.scan_button.set_loading(True)
+        self.scan_job = self._submit(self.service.scan, self._scan_finished, busy=True,
+            title=self.t("正在扫描本地游戏…", "Scanning local libraries…"))
+
+    def _scan_finished(self, entries):
+        self._scanned(entries)
+        message = self.t(f"扫描完成，找到 {len(entries)} 款游戏。", f"Scan complete. Found {len(entries)} games.") if entries else self.t(
+            "扫描完成，未找到游戏。可以手动添加游戏目录。", "Scan complete. No games found. You can add a game folder manually.")
+        self.scan_feedback.setText(message)
+        self.status.setText(message)
+        self.activity_title.setText(message)
 
     def _scanned(self, entries):
         self.current = None
