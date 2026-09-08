@@ -7,19 +7,19 @@
 <p align="center"><strong>DLSS 5, less hassle.</strong></p>
 
 <p align="center">
-  A Windows desktop app to scan games, install graphics components,<br>
-  and manage DLSS 5–related setup. Qt (PySide) UI in Chinese and English.
+  A Windows desktop tool for scanning games, installing graphics components,<br>
+  and managing DLSS 5–related setup. Qt (PySide) UI with Simplified Chinese and English.
 </p>
 
 <p align="center">
-  <strong>v0.2.4 · Player preview</strong> · install core from DLSS5-Autopilot <strong>v1.7.1</strong>
+  <strong>v0.2.4 · Player preview</strong> · install core: DLSS5-Autopilot <strong>v1.7.1</strong>
 </p>
 
 <p align="center">
   <a href="./README.zh-CN.md">中文</a> ·
   <a href="#download">Download</a> ·
-  <a href="#what-it-does">Features</a> ·
-  <a href="#read-this-first">Limits</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#important-notes">Notes</a> ·
   <a href="#credits--license">License</a>
 </p>
 
@@ -35,18 +35,18 @@
 
 ## Download
 
-Get the Windows x64 ZIP from [Releases](https://github.com/ha7rock/JustDLSS5/releases): `JustDLSS5-v0.2.4-windows-x64.zip`.
+Download the Windows x64 package from [Releases](https://github.com/ha7rock/JustDLSS5/releases): `JustDLSS5-v0.2.4-windows-x64.zip`.
 
-1. Extract the **whole** archive somewhere writable.
-2. Run `JustDLSS5.exe`. Keep `_internal` and the license files next to it — don’t copy only the EXE.
-3. The portable build does **not** need a separate Python install.
-4. Optional check: `SHA256SUMS.txt`. In PowerShell: `Get-FileHash <file> -Algorithm SHA256`.
+1. Extract the full archive to a writable folder.
+2. Run `JustDLSS5.exe`. Keep `_internal` and the license files next to it; do not copy only the EXE.
+3. The portable build does not require a separate Python install.
+4. To verify integrity, use `SHA256SUMS.txt`. PowerShell example: `Get-FileHash <file> -Algorithm SHA256`.
 
-Same release also has `BUILD-INFO.json` (how this build was made) and `JustDLSS5-v0.2.4-source-materials.zip` (app + matching dependency sources).
+The same release also includes `BUILD-INFO.json` (build metadata) and `JustDLSS5-v0.2.4-source-materials.zip` (application and matching dependency sources).
 
-How to test: [docs/TESTING-PREVIEW.zh-CN.md](docs/TESTING-PREVIEW.zh-CN.md). Problems: [open an issue](https://github.com/ha7rock/JustDLSS5/issues/new?template=bug-report.yml), or use **Report a problem** in the app.
+Testing guide: [docs/TESTING-PREVIEW.zh-CN.md](docs/TESTING-PREVIEW.zh-CN.md). Feedback: [open an issue](https://github.com/ha7rock/JustDLSS5/issues/new?template=bug-report.yml), or use **Report a problem** in the app.
 
-> Community player preview — not a stable release, and **not affiliated with NVIDIA**.
+> This is a community player preview, not a stable release, and it is not affiliated with NVIDIA.
 
 ---
 
@@ -56,91 +56,91 @@ How to test: [docs/TESTING-PREVIEW.zh-CN.md](docs/TESTING-PREVIEW.zh-CN.md). Pro
 | --- | --- |
 | ![Library · Chinese](docs/images/library.zh-CN.png) | ![Library · English](docs/images/library.en.png) |
 
-*Library shots use mock games for illustration.*
+*Screenshots use sample game data for illustration.*
 
 ---
 
-## Why this exists
+## Overview
 
-Setting up DLSS 5–related components by hand usually means chasing downloads, matching APIs, and hoping you didn’t break a path. [DLSS5-Autopilot](https://github.com/Kizzuwatnaa/DLSS5-Autopilot) already handles the install flow; JustDLSS5 puts an independent desktop UI on top so you can scan, pick a route, preview changes, and clean up without living in a terminal.
+Configuring DLSS 5–related components by hand often means locating packages, matching graphics APIs, and editing paths — tedious and easy to get wrong. Upstream [DLSS5-Autopilot](https://github.com/Kizzuwatnaa/DLSS5-Autopilot) already implements the install flow. JustDLSS5 builds an independent desktop UI on top of that logic for scanning libraries, choosing routes, previewing changes, and handling uninstall or restore.
 
-| | Hand setup | DLSS5-Autopilot | **JustDLSS5** |
+| | Manual setup | DLSS5-Autopilot | **JustDLSS5** |
 |---|---|---|---|
 | UI | None | Upstream tooling | Independent Qt (PySide) desktop app |
-| Languages | — | Upstream | Chinese + English |
-| Game library | Manual | Upstream flow | Scan local games, add folders, see install status |
-| Install core | You | Upstream | Currently Autopilot **v1.7.1** (`core/`) |
+| Languages | — | Upstream | Simplified Chinese / English |
+| Game library | Manual | Upstream flow | Scan local games, add folders, view install status |
+| Install core | Manual | Upstream | Currently Autopilot **v1.7.1** (`core/`) |
 | Maintenance | Manual | Upstream | Preview, diagnose, uninstall, restore backups |
-| Downloads | — | Upstream | Player-preview ZIP, checksums, licenses + sources |
+| Distribution | — | Upstream | Preview ZIP, checksums, licenses and source materials |
 
 ---
 
-## What it does
+## Features
 
 **Install & library**
-- Detect the game setup and suggest install routes
-- Download and configure components; preview before applying
-- Scan local games or add a folder; see what’s already installed
+- Detect the game environment and offer install routes
+- Download and configure components; preview changes before applying
+- Scan local games or add directories; view install status
 
-**Config & maintenance**
-- Tweak settings; save and reload profiles
-- Diagnose problems; uninstall; restore from backups
+**Configuration & maintenance**
+- Adjust parameters; save and reload profiles
+- Diagnose issues; uninstall; restore from backups
 
-**Per game**
-- Manual graphics API choice, remembered per game
-- FSR frame gen and RTX 40 MFG controls when they apply
+**Per-game options**
+- Manual graphics API selection, remembered per game
+- FSR frame generation and RTX 40 MFG controls when applicable
 
-**Day to day**
-- Chinese / English UI; resizable window
-- Background work shows progress on the button you clicked
-- In-app feedback (fills in version and selected game)
-- Update check opens the release page — it **won’t** overwrite the app for you
+**UI & feedback**
+- Simplified Chinese / English UI; resizable window
+- Background tasks show progress on the related action button
+- In-app feedback (pre-fills version and selected game)
+- Update check opens the release page and does **not** overwrite the app automatically
 
-**Also**
+**Additional tools**
 - Screen / window capture (shared start/stop with the camera)
-- Video tools and RTX Remix helpers
+- Video enhancement and RTX Remix related tools
 
 **Safety**
-- Anti-cheat titles ask for **explicit confirm** before install or batch reinstall (default: cancel)
-- No warning does **not** mean the game allows plugins
+- Titles with anti-cheat require confirmation before install or batch reinstall (default: cancel)
+- Absence of a warning does not mean the game allows plugins
 
 ---
 
-## vs DLSS5-Autopilot
+## Compared with DLSS5-Autopilot
 
 | | DLSS5-Autopilot | JustDLSS5 |
 |---|---|---|
 | Role | Upstream install engine / tooling | Desktop UI on that logic |
 | Version | Upstream releases | Currently **v1.7.1** (`backend-version.json`) |
-| UI | Upstream | Own Qt app, Chinese + English |
-| Player package | Upstream project | Portable ZIP, SHA-256, build info, licenses + sources |
-| License | Upstream | MIT for JustDLSS5 code; keep upstream copyright |
+| UI | Upstream | Independent Qt app, Chinese and English |
+| Package | Upstream project | Portable ZIP, SHA-256, build info, licenses and sources |
+| License | Upstream | MIT for JustDLSS5 code; upstream copyright retained |
 
-Install logic lives in `core/`. See [docs/UPSTREAM-AND-SOURCES.zh-CN.md](docs/UPSTREAM-AND-SOURCES.zh-CN.md) and [docs/UPSTREAM_README.md](docs/UPSTREAM_README.md). This preview does **not** include upstream v1.7.2 features.
+Install-related code lives in `core/`. See [docs/UPSTREAM-AND-SOURCES.zh-CN.md](docs/UPSTREAM-AND-SOURCES.zh-CN.md) and [docs/UPSTREAM_README.md](docs/UPSTREAM_README.md). This preview does **not** include upstream v1.7.2 features.
 
 ---
 
-## Read this first
+## Important notes
 
-- There are automated checks for UI, wiring, CLI, and packaged startup. **No “supported games” list** — if it isn’t written down, treat it as untested.
-- First round: prefer **offline single-player**. Back up saves and important configs yourself. The tool’s component backup is not a full game backup.
-- Anti-cheat detection is incomplete; **no warning ≠ safe**. Don’t use online / anti-cheat titles to “see if you get banned.”
-- Components download from third-party sites. A failed download isn’t the same as “game incompatible” — keep the task log.
-- The binary isn’t commercially code-signed. Checksums only show the file isn’t corrupted.
-- It’s a preview. Small issues happen — please report with steps you can reproduce.
+- Automated checks cover UI, integration, CLI, and packaged startup. There is **no published “verified games” list**; combinations not documented separately should be treated as unverified.
+- Prefer **offline single-player** titles for initial testing. Back up saves and important configuration before installing. Component backups from this tool are not a full game backup.
+- Anti-cheat detection is incomplete; **no warning does not mean it is safe to install**. Do not use online or anti-cheat titles for exploratory testing.
+- Components are downloaded from third-party sites. A download failure is not necessarily a game compatibility issue — keep the task log.
+- The binary is not commercially code-signed. SHA-256 only confirms file integrity, not security certification.
+- As a preview build, issues may still occur. Please report problems with reproducible steps.
 
-More detail: [docs/TESTING-PREVIEW.zh-CN.md](docs/TESTING-PREVIEW.zh-CN.md).
+Details: [docs/TESTING-PREVIEW.zh-CN.md](docs/TESTING-PREVIEW.zh-CN.md).
 
-**GPUs** *(from upstream/community notes in `docs/`, not our benchmarks)*
-- Upstream tooling has paths for RTX 50 / 40 / 20–30
-- GTX and anything older than RTX 20 won’t run
-- Unofficial, moving ecosystem — no FPS promises here
+**GPU notes** *(summarized from upstream/community material in `docs/`; not project benchmarks)*
+- Upstream tooling provides paths for RTX 50 / 40 / 20–30
+- GTX and GPUs older than RTX 20 are not supported
+- The ecosystem is still changing; this page makes no FPS claims
 
 ---
 
 ## Build from source
 
-For contributors (Windows x64, Python 3.12):
+For development and contribution (Windows x64, Python 3.12):
 
 ```bat
 python -m venv .venv
@@ -153,7 +153,7 @@ python autopilot_desktop.py
 build-desktop.bat
 ```
 
-Output: `dist/v0.2.4/JustDLSS5/JustDLSS5.exe` — keep `_internal` beside it.
+Output: `dist/v0.2.4/JustDLSS5/JustDLSS5.exe`. Keep `_internal` next to the executable.
 
 Maintainer notes: [docs/MAINTAINING.zh-CN.md](docs/MAINTAINING.zh-CN.md).
 
@@ -163,19 +163,19 @@ Maintainer notes: [docs/MAINTAINING.zh-CN.md](docs/MAINTAINING.zh-CN.md).
 
 **Credits**
 - Install core: [Kizzuwatnaa/DLSS5-Autopilot](https://github.com/Kizzuwatnaa/DLSS5-Autopilot)
-- Ecosystem pieces the project may use, including ReShade, RenoDX, Feeder, OptiScaler, DXVK, RTX Remix, and others — see [docs/THIRD-PARTY-NOTICES.md](docs/THIRD-PARTY-NOTICES.md) and [docs/UPSTREAM-AND-SOURCES.zh-CN.md](docs/UPSTREAM-AND-SOURCES.zh-CN.md)
+- The project may use components such as ReShade, RenoDX, Feeder, OptiScaler, DXVK, and RTX Remix. See [docs/THIRD-PARTY-NOTICES.md](docs/THIRD-PARTY-NOTICES.md) and [docs/UPSTREAM-AND-SOURCES.zh-CN.md](docs/UPSTREAM-AND-SOURCES.zh-CN.md)
 
 **License**
 - JustDLSS5 project code: **MIT**
-- Keep upstream copyright for Autopilot-derived parts
-- Third-party components / NVIDIA runtimes / game mods have their own licenses. The source repo doesn’t ship those binaries; the portable release includes dependency license notes separately
+- Retain upstream copyright for Autopilot-derived parts
+- Third-party components, NVIDIA runtimes, and game mods have their own licenses. The source repository does not include those binaries; the portable package ships dependency license notes separately
 
 ---
 
 ## Docs
 
-- [docs/TESTING-PREVIEW.zh-CN.md](docs/TESTING-PREVIEW.zh-CN.md) — player preview guide
-- [docs/RELEASE-v0.2.4.md](docs/RELEASE-v0.2.4.md) — v0.2.4 notes
+- [docs/TESTING-PREVIEW.zh-CN.md](docs/TESTING-PREVIEW.zh-CN.md)
+- [docs/RELEASE-v0.2.4.md](docs/RELEASE-v0.2.4.md)
 - [docs/THIRD-PARTY-NOTICES.md](docs/THIRD-PARTY-NOTICES.md)
 - [docs/MAINTAINING.zh-CN.md](docs/MAINTAINING.zh-CN.md)
 - [docs/UPSTREAM-AND-SOURCES.zh-CN.md](docs/UPSTREAM-AND-SOURCES.zh-CN.md) · [docs/UPSTREAM_README.md](docs/UPSTREAM_README.md)
