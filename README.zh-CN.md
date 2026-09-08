@@ -19,11 +19,11 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.2.0-blue" alt="version 0.2.0">
+  <img src="https://img.shields.io/badge/version-0.2.4-blue" alt="version 0.2.4">
   <img src="https://img.shields.io/badge/platform-Windows%20x64-lightgrey" alt="Windows x64">
   <img src="https://img.shields.io/badge/Python-3.12-3776AB" alt="Python 3.12">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
-  <img src="https://img.shields.io/badge/status-private%20pre--release-orange" alt="private pre-release">
+  <img src="https://img.shields.io/badge/status-public%20preview-orange" alt="public preview">
 </p>
 
 ---
@@ -95,7 +95,7 @@ JustDLSS5 是**社区工具**，**与 NVIDIA 无任何隶属关系**。能否跑
 | 引擎版本 | 上游发版 | 钉死 **v1.7.1**（`backend-version.json`） |
 | 界面 | 上游 | 独立 Qt（PySide） |
 | 国际化 | 上游 | 中英双语 UI |
-| 分发 | 上游项目 | 私有预发布；从源码构建（尚无公开 GitHub Releases） |
+| 分发 | 上游项目 | 公开测试版；[下载 Windows x64 版](https://github.com/ha7rock/JustDLSS5/releases/tag/v0.2.4) |
 | 许可 | 上游 | JustDLSS5 项目代码 MIT；保留上游版权 |
 
 业务逻辑在 `core/`，基于 [Kizzuwatnaa/DLSS5-Autopilot](https://github.com/Kizzuwatnaa/DLSS5-Autopilot)。详见 [docs/UPSTREAM-AND-SOURCES.zh-CN.md](docs/UPSTREAM-AND-SOURCES.zh-CN.md)、[docs/UPSTREAM_README.md](docs/UPSTREAM_README.md)。
@@ -104,7 +104,7 @@ JustDLSS5 是**社区工具**，**与 NVIDIA 无任何隶属关系**。能否跑
 
 ## 快速开始
 
-> **现状说明：** 仓库目前为**私有**。尚**无公开 GitHub Releases** — 私有预发布阶段。请在 Windows 上从源码构建。
+> **玩家测试版：**[下载 Windows x64 版 v0.2.4](https://github.com/ha7rock/JustDLSS5/releases/tag/v0.2.4)。完整解压 ZIP 后运行 `JustDLSS5.exe`，无需自行安装 Python。测试范围与已知限制见发行说明。
 
 ### 环境要求
 
@@ -130,7 +130,7 @@ build-desktop.bat
 产物：
 
 ```text
-dist/v0.2.0/JustDLSS5/JustDLSS5.exe
+dist/v0.2.4/JustDLSS5/JustDLSS5.exe
 ```
 
 请保留 exe 同目录下的 `_internal` 文件夹，否则无法正常运行。
@@ -188,4 +188,4 @@ dist/v0.2.0/JustDLSS5/JustDLSS5.exe
 
 ---
 
-<p align="center">JustDLSS5 · v0.2.0 · MIT · 社区工具，与 NVIDIA 无关</p>
+<p align="center">JustDLSS5 · v0.2.4 · MIT · 社区工具，与 NVIDIA 无关</p>

@@ -19,11 +19,11 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.2.0-blue" alt="version 0.2.0">
+  <img src="https://img.shields.io/badge/version-0.2.4-blue" alt="version 0.2.4">
   <img src="https://img.shields.io/badge/platform-Windows%20x64-lightgrey" alt="Windows x64">
   <img src="https://img.shields.io/badge/Python-3.12-3776AB" alt="Python 3.12">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
-  <img src="https://img.shields.io/badge/status-private%20pre--release-orange" alt="private pre-release">
+  <img src="https://img.shields.io/badge/status-public%20preview-orange" alt="public preview">
 </p>
 
 ---
@@ -95,7 +95,7 @@ JustDLSS5 is a **community tool**. It is **not affiliated with NVIDIA**. Support
 | Engine version | Upstream releases | Pinned to **v1.7.1** (`backend-version.json`) |
 | UI | Upstream | Independent Qt (PySide) |
 | i18n | Upstream | Chinese + English UI |
-| Distribution | Upstream project | Private pre-release; build from source (no public GitHub Releases yet) |
+| Distribution | Upstream project | Public preview; [Windows x64 download](https://github.com/ha7rock/JustDLSS5/releases/tag/v0.2.4) |
 | License | Upstream | MIT for JustDLSS5 project code; retain upstream copyright |
 
 Business logic lives in `core/`, based on [Kizzuwatnaa/DLSS5-Autopilot](https://github.com/Kizzuwatnaa/DLSS5-Autopilot). See [docs/UPSTREAM-AND-SOURCES.zh-CN.md](docs/UPSTREAM-AND-SOURCES.zh-CN.md) and [docs/UPSTREAM_README.md](docs/UPSTREAM_README.md).
@@ -104,7 +104,7 @@ Business logic lives in `core/`, based on [Kizzuwatnaa/DLSS5-Autopilot](https://
 
 ## Quick start
 
-> **Honest status:** the repo is currently **private**. There are **no public GitHub Releases** yet — this is a private pre-release. Build from source on Windows.
+> **Public preview:** [Download v0.2.4 for Windows x64](https://github.com/ha7rock/JustDLSS5/releases/tag/v0.2.4). Extract the complete ZIP and run `JustDLSS5.exe`; Python is included. See the release notes for testing scope and known limits.
 
 ### Requirements
 
@@ -130,7 +130,7 @@ build-desktop.bat
 Output:
 
 ```text
-dist/v0.2.0/JustDLSS5/JustDLSS5.exe
+dist/v0.2.4/JustDLSS5/JustDLSS5.exe
 ```
 
 Keep the `_internal` folder next to the exe — the app needs it.
@@ -186,4 +186,4 @@ Do **not** treat any path as guaranteed FPS or compatibility. JustDLSS5 does not
 
 ---
 
-<p align="center">JustDLSS5 · v0.2.0 · MIT · community tool, not affiliated with NVIDIA</p>
+<p align="center">JustDLSS5 · v0.2.4 · MIT · community tool, not affiliated with NVIDIA</p>

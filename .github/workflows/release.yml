@@ -5,6 +5,11 @@ on:
     branches: [main, 'codex/**']
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_assets:
+        description: Prepare ZIP, checksums and corresponding source for release review
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -16,7 +21,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.12.14'
       - name: Install desktop dependencies
         run: python -m pip install -r requirements-desktop.txt
       - name: Check backend interface
@@ -29,9 +34,22 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python test_product.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python test_release.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python test_reshade_ini.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build JustDLSS5
         run: python tools/build_desktop.py
       - name: Verify packaged startup
         run: python tools/smoke_desktop.py
+      - name: Prepare release materials
+        if: github.event_name == 'workflow_dispatch' && inputs.release_assets
+        run: python tools/prepare_release.py
+      - name: Retain release candidate
+        if: github.event_name == 'workflow_dispatch' && inputs.release_assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: JustDLSS5-release-candidate
+          path: dist/release-v*/*
+          if-no-files-found: error
+          retention-days: 90

@@ -16,12 +16,14 @@ from test_ui import FakeService, entry
 
 
 def main():
+    english = "--english" in sys.argv
     app = QApplication([])
     app.setStyle("Fusion")
     app.setFont(QFont("Microsoft YaHei UI", 10))
     with tempfile.TemporaryDirectory() as temp, patch.object(prefs, "FILE", Path(temp) / "prefs.json"):
+        prefs.set_("language", "en" if english else "zh")
         service = FakeService()
-        service.entries = [entry("示例游戏 A"), entry("示例游戏 B", True), entry("示例游戏 C")]
+        service.entries = [entry("Example game A" if english else "示例游戏 A"), entry("Example game B" if english else "示例游戏 B", True), entry("Example game C" if english else "示例游戏 C")]
         window = MainWindow(service=service, background=False)
         window.resize(1440, 900)
         window.show()
@@ -33,9 +35,9 @@ def main():
                 break
         if window.jobs.active:
             raise RuntimeError("Preview fixture did not finish")
-        window.status.setText("界面展示 · 示例数据")
+        window.status.setText("Interface preview · Example data" if english else "界面展示 · 示例数据")
         app.processEvents()
-        destination = ROOT / "docs/images/library.zh-CN.png"
+        destination = ROOT / ("docs/images/library.en.png" if english else "docs/images/library.zh-CN.png")
         destination.parent.mkdir(parents=True, exist_ok=True)
         if not window.grab().save(str(destination)):
             raise RuntimeError("Could not save screenshot")

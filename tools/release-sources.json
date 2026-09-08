@@ -1,0 +1,71 @@
+[
+  {
+    "name": "qtbase",
+    "version": "6.11.2",
+    "commit": "ef55f427f2c8b410d34f8a7681020a3000cf6866",
+    "url": "https://codeload.github.com/qt/qtbase/tar.gz/ef55f427f2c8b410d34f8a7681020a3000cf6866",
+    "sha256": "12b3a9ba00613180caea4da77a1ae6fc1ca054b8822b316ba3a05fb4414fba56"
+  },
+  {
+    "name": "qtsvg",
+    "version": "6.11.2",
+    "commit": "17ca512f903f935282ebeca496aac5d11ba4199a",
+    "url": "https://codeload.github.com/qt/qtsvg/tar.gz/17ca512f903f935282ebeca496aac5d11ba4199a",
+    "sha256": "67214f604e86af925d9e2c9f32af5e778a621cabfb51011b7e89aef268a6a150"
+  },
+  {
+    "name": "pyside-setup",
+    "version": "6.11.2",
+    "commit": "24627cd36e1593adf22eb1f2950e4248e7bcc1ec",
+    "url": "https://codeload.github.com/pyside/pyside-setup/tar.gz/24627cd36e1593adf22eb1f2950e4248e7bcc1ec",
+    "sha256": "943a1403fbf53db9e801b42b76ebdde0b62111c32c7fb8af9e8b235a51c6d277"
+  },
+  {
+    "name": "cpython",
+    "version": "3.12.14",
+    "url": "https://www.python.org/ftp/python/3.12.14/Python-3.12.14.tgz",
+    "sha256": "6c6df908d2c3fd24e6d76869e92542abd0f33aec9dfc18df8875f89660286d43"
+  },
+  {
+    "name": "bzip2",
+    "version": "1.0.8",
+    "commit": "05301997b2f9590f49c672cf3dfd3d3dfa7ad521",
+    "url": "https://codeload.github.com/python/cpython-source-deps/tar.gz/05301997b2f9590f49c672cf3dfd3d3dfa7ad521",
+    "sha256": "ab14accac86cdd92021d50465deeb221b476d6675bd1383d3c7fb83751c2e0a3"
+  },
+  {
+    "name": "libffi",
+    "version": "3.4.4",
+    "commit": "73b247f34ef3ae1859b8c2c34d321d34ebc5db15",
+    "url": "https://codeload.github.com/python/cpython-source-deps/tar.gz/73b247f34ef3ae1859b8c2c34d321d34ebc5db15",
+    "sha256": "a9b2840c1b99a2b57746c50f1f2ab902420628111690ec420e7293ec1f502d7b"
+  },
+  {
+    "name": "openssl",
+    "version": "3.0.16",
+    "commit": "bb01d0a37b909f6fe280b1c2015fa1f6005fb4e2",
+    "url": "https://codeload.github.com/python/cpython-source-deps/tar.gz/bb01d0a37b909f6fe280b1c2015fa1f6005fb4e2",
+    "sha256": "76f18f21dbc7e0ba747de571f908a9ac16c0173d0c5c9c2816993e09e85dc5ff"
+  },
+  {
+    "name": "xz",
+    "version": "5.2.5",
+    "commit": "c6bc0c612605622aaef101a33a751f9de2ecc193",
+    "url": "https://codeload.github.com/python/cpython-source-deps/tar.gz/c6bc0c612605622aaef101a33a751f9de2ecc193",
+    "sha256": "115433c946ee069e857fd04cf41b38a4a74ed45d868a3b2e08ccd4a1f04f39d0"
+  },
+  {
+    "name": "zlib",
+    "version": "1.3.1",
+    "commit": "4dc98e1909830e2bdc2a9cc2236e3c5d5037335b",
+    "url": "https://codeload.github.com/python/cpython-source-deps/tar.gz/4dc98e1909830e2bdc2a9cc2236e3c5d5037335b",
+    "sha256": "1fe30e919eb560f495de9ee4bd7ba5216ce13f454affb4ccc32e15efa3878f5e"
+  },
+  {
+    "name": "openssl",
+    "version": "3.5.8",
+    "commit": "f4dc4d58b48d346a8270183f89acf826d459b0ca",
+    "url": "https://codeload.github.com/openssl/openssl/tar.gz/f4dc4d58b48d346a8270183f89acf826d459b0ca",
+    "sha256": "14067f511684d80698ffe97b8ad7989b9271ef6eef1b4b115cb00966c13e89d3"
+  }
+]
