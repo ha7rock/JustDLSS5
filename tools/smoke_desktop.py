@@ -2,6 +2,7 @@
 import ctypes
 from ctypes import wintypes
 import os
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -20,6 +21,9 @@ def main():
     user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
     with tempfile.TemporaryDirectory(prefix="studio-smoke-") as temp:
         env = dict(os.environ, LOCALAPPDATA=temp)
+        settings = Path(temp) / "dlss5-autopilot/settings.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(json.dumps({"product_update_check": False}), encoding="utf8")
         startup = subprocess.STARTUPINFO()
         startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         startup.wShowWindow = 0

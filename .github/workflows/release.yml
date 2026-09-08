@@ -27,6 +27,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python test_cli.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python test_product.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python test_reshade_ini.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build JustDLSS5

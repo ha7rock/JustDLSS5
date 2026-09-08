@@ -1,0 +1,87 @@
+name: 问题反馈 / Bug report
+description: 游戏安装、启动、画面或应用操作问题 / Installation, game or application problems
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请确认预填信息。截图和日志请先遮盖账号、密钥及个人路径。提交后内容对有仓库访问权限的人可见；公开仓库的 Issue 对所有人可见。
+        Review prefilled details. Remove account details, secrets and personal paths from attachments before submitting.
+  - type: input
+    id: game
+    attributes:
+      label: 游戏与游戏版本 / Game and game version
+      description: 应用本身的问题请填“不涉及游戏”。/ Use N/A for application-only issues.
+    validations:
+      required: true
+  - type: input
+    id: store
+    attributes:
+      label: 游戏来源 / Store or launcher
+      placeholder: Steam / Epic / GOG / Xbox / Folder / N/A
+    validations:
+      required: true
+  - type: textarea
+    id: versions
+    attributes:
+      label: JustDLSS5 与引擎版本 / App and engine versions
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Windows 版本 / Windows version
+    validations:
+      required: true
+  - type: textarea
+    id: hardware
+    attributes:
+      label: 显卡与驱动版本 / GPU and driver
+      description: 无法确认的项请写“不清楚”。/ Use unknown if unavailable.
+    validations:
+      required: true
+  - type: textarea
+    id: configuration
+    attributes:
+      label: 安装配置 / Installation settings
+      description: 图形接口、路线、插件版本、补帧及反作弊情况。不涉及请注明。/ API, route, add-on versions, frame generation and anti-cheat; use N/A if unrelated.
+    validations:
+      required: true
+  - type: dropdown
+    id: launch
+    attributes:
+      label: 游戏能否启动 / Does the game launch?
+      options:
+        - 能启动 / Yes
+        - 无法启动 / No
+        - 启动后退出或崩溃 / Exits or crashes
+        - 不涉及游戏 / N/A
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题与复现步骤 / Problem and steps to reproduce
+      placeholder: "1. …\n2. …\n实际发生了什么 / Actual result:"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果 / Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: 截图或录屏 / Screenshots or recording
+      description: 拖入附件；无法截图请说明原因。/ Attach files, or explain why none can be provided.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 诊断与相关日志 / Diagnosis and relevant logs
+      description: 从“任务与日志”复制相关片段；无法获取请注明。不要上传整个游戏目录。/ Paste relevant, redacted excerpts; explain if unavailable.
+    validations:
+      required: true

@@ -2,6 +2,7 @@
 from dataclasses import replace
 from pathlib import Path
 import sys
+import time
 
 from PySide6.QtCore import Qt, QTimer, QUrl, QSize
 from PySide6.QtGui import QDesktopServices, QFont, QIcon, QPixmap, QPainter, QColor, QPen, QKeySequence, QShortcut
@@ -18,6 +19,7 @@ from .library import LibraryModel, LibraryFilter, LibraryTable
 from .theme import STYLES
 from .controls import Button, ComboBox, Slider
 from .about import NAME, VERSION, REPOSITORY
+from . import feedback, updates
 
 
 def column(parent=None, margins=0, spacing=12):
@@ -135,6 +137,7 @@ class MainWindow(QMainWindow):
         self.jobs.completed.connect(self._completed)
         self.jobs.events.connect(self._events)
         self.callbacks = {}
+        self.update_check_running = False
         self.busy_job = None
         self.selection_generation = 0
         self.log_lines = []
@@ -161,6 +164,8 @@ class MainWindow(QMainWindow):
         self.search_shortcut.activated.connect(self.focus_search)
         if background:
             self._submit(lambda emit: self.service.hardware(), self._hardware)
+            if prefs.get("product_update_check", True) and updates.check_due(prefs.get("product_update_checked", 0), time.time()):
+                self.check_product_update(automatic=True)
 
     def t(self, zh, en):
         return zh if self.chinese else en
@@ -201,6 +206,9 @@ class MainWindow(QMainWindow):
                              lambda: QDesktopServices.openUrl(QUrl(REPOSITORY)), "nav")
         docs_button.setIcon(navigation_icon("docs"))
         nav.addWidget(docs_button)
+        feedback_button = button(self.t("反馈问题 ↗", "Report a problem ↗"), self.report_problem, "nav")
+        feedback_button.setIcon(navigation_icon("docs"))
+        nav.addWidget(feedback_button)
         nav.addSpacing(14)
         self.language = ComboBox()
         self.language.addItems(["简体中文", "English"])
@@ -982,6 +990,18 @@ class MainWindow(QMainWindow):
         page = QWidget()
         layout = column(page, 28, 22)
         self._page_header(layout, self.t("设置", "Settings"), self.t("查看版本和更新说明，更新已安装的组件。", "View versions and update instructions, or update installed components."))
+        layout.addWidget(label(self.t("应用更新", "Application updates"), "subheading"))
+        self.product_update_status = label(self.t("检查 JustDLSS5 新版本。", "Check for a new JustDLSS5 release."), "muted", True)
+        layout.addWidget(self.product_update_status)
+        self.auto_update_check = QCheckBox(self.t("启动时检查更新（每天最多一次）", "Check on startup (at most once a day)"))
+        self.auto_update_check.setChecked(bool(prefs.get("product_update_check", True)))
+        self.auto_update_check.toggled.connect(lambda checked: prefs.set_("product_update_check", checked))
+        layout.addWidget(self.auto_update_check)
+        self.preview_update_check = QCheckBox(self.t("包含预发布版本", "Include prereleases"))
+        self.preview_update_check.setChecked(bool(prefs.get("product_update_preview", False)))
+        self.preview_update_check.toggled.connect(lambda checked: prefs.set_("product_update_preview", checked))
+        layout.addWidget(self.preview_update_check)
+        layout.addWidget(button(self.t("检查应用更新", "Check for updates"), self.check_product_update), alignment=Qt.AlignmentFlag.AlignLeft)
         card = QFrame()
         card.setObjectName("card")
         content = column(card, 24, 12)
@@ -994,12 +1014,50 @@ class MainWindow(QMainWindow):
         layout.addWidget(button(self.t("重新安装所有游戏的组件", "Reinstall components for all games"), self.update_all), alignment=Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(label(self.t("窗口大小自动保存。Ctrl+F 搜索游戏。拖动游戏列表与设置之间的分隔线可调整空间。", "Window size is remembered. Ctrl+F focuses search. Drag the divider to adjust library and setup widths."), "muted", True))
         layout.addStretch()
-        return page
+        return scroller(page)
 
     def open_update_guide(self):
         path = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent)) / "README.zh-CN.md"
         if path.is_file():
             self.show_text(self.t("更新说明", "Update guide"), path.read_text(encoding="utf8"))
+
+    def report_problem(self):
+        fields = feedback.report_fields(update.VERSION, self.current, self.inspection,
+            self.route_combo.currentData() or "" if self.current else "")
+        preview = "\n\n".join(f"{key}: {value}" for key, value in fields.items())
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle(self.t("反馈问题", "Report a problem"))
+        dialog.setText(self.t("将在 GitHub 打开反馈表单，预填以下信息。截图和日志由你选择添加，提交前可修改。私有仓库需要访问权限。",
+            "Open a GitHub form with the details below. Review before submitting; add screenshots and logs yourself. Private repositories require access."))
+        dialog.setInformativeText(preview)
+        dialog.setStandardButtons(QMessageBox.StandardButton.Open | QMessageBox.StandardButton.Cancel)
+        if dialog.exec() == QMessageBox.StandardButton.Open:
+            if not QDesktopServices.openUrl(QUrl(feedback.issue_url(fields))):
+                self.show_text(self.t("无法打开浏览器", "Could not open browser"), feedback.issue_url(fields))
+
+    def check_product_update(self, checked=False, automatic=False):
+        if self.update_check_running:
+            return
+        self.update_check_running = True
+        prefs.set_("product_update_checked", time.time())
+        preview = bool(prefs.get("product_update_preview", False))
+        self.product_update_status.setText(self.t("正在检查…", "Checking…"))
+        def done(result):
+            self.update_check_running = False
+            messages = {
+                "current": self.t("当前已是最新版本。", "You are up to date."),
+                "no_release": self.t("所选渠道尚无发行版本。", "No releases in the selected channel."),
+                "restricted": self.t("无法读取发行信息：仓库可能为私有、尚无发行版或请求受限。可在浏览器登录 GitHub 后查看。", "Release information is inaccessible: private repository, no release or API limit. Check GitHub in your browser."),
+                "unavailable": self.t("更新检查失败，请稍后重试。", "Update check failed. Try again later."),
+                "available": self.t(f"发现 {result.version}，可查看更新说明。", f"{result.version} is available. View the release notes."),
+            }
+            self.product_update_status.setText(messages.get(result.status, messages["unavailable"]))
+            if result.status == "available":
+                self.status.setText(self.product_update_status.text())
+                if not automatic and QMessageBox.question(self, self.t("发现新版本", "Update available"),
+                    self.t(f"打开 {result.version} 的发行页面？", f"Open the release page for {result.version}?")) == QMessageBox.StandardButton.Yes:
+                    QDesktopServices.openUrl(QUrl(result.url))
+        self._submit(lambda emit: updates.check(preview), done)
 
     def update_all(self):
         entries = [entry for entry in self.model.entries if entry.installed]
