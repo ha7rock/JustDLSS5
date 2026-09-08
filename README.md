@@ -1,54 +1,189 @@
-# JustDLSS5
+<p align="center">
+  <img src="docs/images/app-icon.png" alt="JustDLSS5" width="96" height="96">
+</p>
 
-<img src="docs/images/app-icon.png" width="96" height="96" alt="JustDLSS5 图标">
+<h1 align="center">JustDLSS5</h1>
 
-**DLSS 5，少一点折腾。**
+<p align="center"><strong>DLSS 5, less hassle.</strong></p>
 
-JustDLSS5 是一款 Windows 桌面工具，用于检测游戏、下载画面组件，以及管理 DLSS 5 的安装与配置。选择游戏后，查看可用方案，在同一个界面里完成安装、调整和卸载。
+<p align="center">
+  Windows desktop tool to detect games, download graphics components,<br>
+  and install &amp; manage DLSS 5 setup — with a Qt (PySide) UI in Chinese and English.
+</p>
 
-![JustDLSS5 游戏库](docs/images/library.zh-CN.png)
+<p align="center">
+  <a href="./README.zh-CN.md">中文</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#credits--license">License</a>
+</p>
 
-*界面示例，使用模拟游戏数据。*
+<p align="center">
+  <img src="https://img.shields.io/badge/version-0.2.0-blue" alt="version 0.2.0">
+  <img src="https://img.shields.io/badge/platform-Windows%20x64-lightgrey" alt="Windows x64">
+  <img src="https://img.shields.io/badge/Python-3.12-3776AB" alt="Python 3.12">
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
+  <img src="https://img.shields.io/badge/status-private%20pre--release-orange" alt="private pre-release">
+</p>
 
-## 功能
+---
 
-- **组件安装**：检测游戏环境，提供安装方案，下载并配置所需组件。
-- **游戏管理**：扫描本地游戏，也可手动添加目录，查看各游戏的安装状态。
-- **配置方案**：调整参数、保存方案，在需要时重新载入。
-- **维护与恢复**：安装前预览变更，出现问题时查看诊断，支持卸载组件与恢复备份。
+## Screenshot
 
-支持手动选择图形 API，并在适用的游戏和硬件上提供补帧选项。另提供视频增强、屏幕／窗口捕获和 RTX Remix 工具。界面支持简体中文与英文。
+![JustDLSS5 game library (Chinese UI)](docs/images/library.zh-CN.png)
 
-## 使用
+*Game library view (Chinese UI). Screenshot uses mock game data for illustration.*
 
-当前为私有预发布版本（JustDLSS5 0.2.0 / 安装引擎 1.7.1）。从源码构建后运行 `JustDLSS5.exe`，请保留同目录的 `_internal` 文件夹。
+---
 
-1. 扫描游戏库，或添加游戏目录。
-2. 选择游戏，查看检测结果和安装设置。
-3. 按需预览变更，然后安装。
+## Why JustDLSS5
 
-这是社区工具，与 NVIDIA 无隶属关系。支持情况取决于游戏、显卡和第三方组件；反作弊提示不能覆盖所有游戏。请勿将未标记理解为允许安装插件。具体下载来源与文件位置见 [上游与资源说明](docs/UPSTREAM-AND-SOURCES.zh-CN.md)。
+Setting up DLSS 5–related components by hand means hunting downloads, matching APIs, and hoping you didn't break a game path. Upstream [DLSS5-Autopilot](https://github.com/Kizzuwatnaa/DLSS5-Autopilot) already encodes the install business logic — JustDLSS5 wraps that logic in an independent desktop UI so you can scan, choose routes, preview, and maintain without living in the terminal.
 
-## 开发与构建
+| | Hand setup | DLSS5-Autopilot | **JustDLSS5** |
+|---|---|---|---|
+| UI | None | Upstream tooling | Independent Qt (PySide) desktop app |
+| Languages | — | Upstream | Chinese + English UI |
+| Game library | Manual | Upstream flow | Scan local games, manual dirs, install status |
+| Install engine | You | Upstream | Pinned to Autopilot **v1.7.1** (`core/`) |
+| Maintenance | Manual | Upstream | Preview, diagnose, uninstall, restore backups |
 
-Windows x64、Python 3.12：
+JustDLSS5 is a **community tool**. It is **not affiliated with NVIDIA**. Support depends on the game, GPU, and third-party components you install.
 
-```powershell
+---
+
+## Features
+
+**Component install**
+- Detect the game environment and offer install routes
+- Download and configure graphics components
+
+**Game library**
+- Scan locally installed games
+- Add directories manually
+- See install status at a glance
+
+**Config profiles**
+- Adjust parameters per need
+- Save and reload profiles
+
+**Maintenance**
+- Preview changes before applying
+- Diagnose issues
+- Uninstall components
+- Restore from backups
+
+**Per-game controls**
+- Manual graphics API selection, remembered per game
+- FSR frame generation and RTX 40 MFG controls when applicable
+
+**Extras**
+- Screen / window capture (shared start/stop lifecycle with camera)
+- Video enhancement tools
+- RTX Remix tools
+
+**Safety**
+- Anti-cheat titles require **explicit confirm** before install or batch reinstall (default: cancel)
+
+---
+
+## Comparison vs DLSS5-Autopilot
+
+| | DLSS5-Autopilot | JustDLSS5 |
+|---|---|---|
+| Role | Upstream install engine / tooling | Desktop product UI on top of that logic |
+| Engine version | Upstream releases | Pinned to **v1.7.1** (`backend-version.json`) |
+| UI | Upstream | Independent Qt (PySide) |
+| i18n | Upstream | Chinese + English UI |
+| Distribution | Upstream project | Private pre-release; build from source (no public GitHub Releases yet) |
+| License | Upstream | MIT for JustDLSS5 project code; retain upstream copyright |
+
+Business logic lives in `core/`, based on [Kizzuwatnaa/DLSS5-Autopilot](https://github.com/Kizzuwatnaa/DLSS5-Autopilot). See [docs/UPSTREAM-AND-SOURCES.zh-CN.md](docs/UPSTREAM-AND-SOURCES.zh-CN.md) and [docs/UPSTREAM_README.md](docs/UPSTREAM_README.md).
+
+---
+
+## Quick start
+
+> **Honest status:** the repo is currently **private**. There are **no public GitHub Releases** yet — this is a private pre-release. Build from source on Windows.
+
+### Requirements
+
+- Windows x64
+- Python 3.12
+- A supported NVIDIA GPU path (see [Requirements & limits](#requirements--limits))
+
+### Run from source
+
+```bat
 python -m venv .venv
-.venv/Scripts/python.exe -m pip install -r requirements-desktop.txt
-.venv/Scripts/python.exe autopilot_desktop.py
+.venv\Scripts\activate
+pip install -r requirements-desktop.txt
+python autopilot_desktop.py
 ```
 
-运行 `build-desktop.bat` 检查接口、执行测试、打包并验证启动。输出为 `dist/v0.2.0/JustDLSS5/JustDLSS5.exe`。
+### Build the desktop app
 
-本地构建后可双击 `start-desktop.bat`，始终打开这一版本。
+```bat
+build-desktop.bat
+```
 
-源码结构和后端更新方法见 [维护说明](README.zh-CN.md)。
+Output:
 
-## 致谢与许可
+```text
+dist/v0.2.0/JustDLSS5/JustDLSS5.exe
+```
 
-感谢 **[Kizzuwatnaa / DLSS5-Autopilot](https://github.com/Kizzuwatnaa/DLSS5-Autopilot)** 提供游戏检测、组件编排、安装、备份和卸载的基础。JustDLSS5 延续这些业务能力，独立维护桌面界面与中文体验。原项目介绍保存在 [上游 README](docs/UPSTREAM_README.md)。
+Keep the `_internal` folder next to the exe — the app needs it.
 
-也感谢 ReShade、RenoDX、Feeder、OptiScaler、DXVK、RTX Remix 及其他组件作者。各组件的归属和下载地址见 [资源说明](docs/UPSTREAM-AND-SOURCES.zh-CN.md)。
+---
 
-项目代码采用 [MIT 许可证](LICENSE)，保留上游版权。第三方运行库、插件和游戏资源各自适用其许可，不因本项目开源而成为 MIT 授权内容。本仓库不包含 NVIDIA 运行库或游戏模组资源。
+## Requirements & limits
+
+**Platform**
+- Windows x64 only (as built today)
+- Python 3.12 for source runs
+
+**GPU reality** *(summarized from upstream/community docs preserved in `docs/`)*
+- RTX 50 / 40 / 20–30 community paths exist in upstream tooling
+- GTX and GPUs below RTX 20 do **not** run
+- This is an unofficial, early ecosystem — components change
+
+Do **not** treat any path as guaranteed FPS or compatibility. JustDLSS5 does not publish benchmarks.
+
+**Anti-cheat**
+- Games with anti-cheat need explicit confirmation before install / batch reinstall
+- Confirmations and warnings are **not guarantees** that a title will accept the install
+
+**Not NVIDIA**
+- Not affiliated with NVIDIA
+- The repo does **not** ship NVIDIA runtimes or game mod assets
+- Third-party components, NVIDIA runtimes, and game mods have their **own** licenses
+
+**Support**
+- Results depend on game + GPU + third-party components
+- Community tool — expect rough edges while the ecosystem moves
+
+---
+
+## Credits & license
+
+**Credits**
+- Install engine / business logic: [Kizzuwatnaa/DLSS5-Autopilot](https://github.com/Kizzuwatnaa/DLSS5-Autopilot)
+- Ecosystem tools & components referenced by the project and upstream, including ReShade, RenoDX, Feeder, OptiScaler, DXVK, RTX Remix, and others
+
+**License**
+- JustDLSS5 project code: **MIT**
+- Retain upstream copyright for Autopilot-derived logic
+- Third-party components / NVIDIA runtimes / game mods: their own licenses — this repo does not redistribute those binaries
+
+---
+
+## Docs
+
+- [docs/UPSTREAM-AND-SOURCES.zh-CN.md](docs/UPSTREAM-AND-SOURCES.zh-CN.md) — upstream & sources
+- [docs/UPSTREAM_README.md](docs/UPSTREAM_README.md) — upstream README (preserved)
+- Maintenance / contributor notes: see `docs/MAINTAINING.zh-CN.md` (recommended home for backend update, tests, and source map — previously the Chinese README)
+
+---
+
+<p align="center">JustDLSS5 · v0.2.0 · MIT · community tool, not affiliated with NVIDIA</p>
