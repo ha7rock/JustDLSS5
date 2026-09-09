@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <strong>v0.2.4 · 玩家测试版</strong> · 安装核心为 DLSS5-Autopilot <strong>v1.7.1</strong>
+  <strong>v0.2.5 · 玩家测试版</strong> · 安装核心为 DLSS5-Autopilot <strong>v1.7.3</strong>
 </p>
 
 <p align="center">
@@ -24,10 +24,10 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.2.4-blue" alt="version 0.2.4">
+  <img src="https://img.shields.io/badge/version-0.2.5-blue" alt="version 0.2.5">
   <img src="https://img.shields.io/badge/status-player%20preview-orange" alt="player preview">
   <img src="https://img.shields.io/badge/platform-Windows%20x64-lightgrey" alt="Windows x64">
-  <img src="https://img.shields.io/badge/engine-Autopilot%20v1.7.1-informational" alt="Autopilot v1.7.1">
+  <img src="https://img.shields.io/badge/engine-Autopilot%20v1.7.3-informational" alt="Autopilot v1.7.3">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
 </p>
 
@@ -35,14 +35,14 @@
 
 ## 下载
 
-请从 [Releases](https://github.com/ha7rock/JustDLSS5/releases) 下载 Windows x64 包：`JustDLSS5-v0.2.4-windows-x64.zip`。
+请从 [Releases](https://github.com/ha7rock/JustDLSS5/releases) 下载 Windows x64 包：`JustDLSS5-v0.2.5-windows-x64.zip`。
 
 1. 将压缩包完整解压到可写目录。
 2. 运行 `JustDLSS5.exe`。请保留同目录下的 `_internal` 文件夹及许可文件，勿仅复制单个 EXE。
 3. 便携版无需另行安装 Python。
 4. 如需校验完整性，可对照 `SHA256SUMS.txt`。PowerShell 示例：`Get-FileHash <文件> -Algorithm SHA256`。
 
-同版本还提供：`BUILD-INFO.json`（构建信息）、`JustDLSS5-v0.2.4-source-materials.zip`（应用及对应依赖源码）。
+同版本还提供：`BUILD-INFO.json`（构建信息）、`JustDLSS5-v0.2.5-source-materials.zip`（应用及对应依赖源码）。
 
 测试说明：[docs/TESTING-PREVIEW.zh-CN.md](docs/TESTING-PREVIEW.zh-CN.md)。问题反馈：[提交 Issue](https://github.com/ha7rock/JustDLSS5/issues/new?template=bug-report.yml)，或使用应用内「反馈问题」。
 
@@ -69,7 +69,7 @@
 | 界面 | 无 | 上游工具 | 独立 Qt（PySide）桌面应用 |
 | 语言 | — | 上游 | 简体中文 / 英文 |
 | 游戏库 | 手动整理 | 上游流程 | 扫描本机、添加目录、查看安装状态 |
-| 安装核心 | 自行处理 | 上游 | 当前为 Autopilot **v1.7.1**（`core/`） |
+| 安装核心 | 自行处理 | 上游 | 当前为 Autopilot **v1.7.3**（`core/`） |
 | 维护 | 手动 | 上游 | 预览、诊断、卸载、备份还原 |
 | 分发 | — | 上游 | 测试版 ZIP、校验摘要、许可与源码包 |
 
@@ -111,7 +111,7 @@
 | | DLSS5-Autopilot | JustDLSS5 |
 |---|---|---|
 | 定位 | 上游安装引擎 / 工具 | 基于该逻辑的桌面界面 |
-| 版本 | 随上游发布 | 当前为 **v1.7.1**（见 `backend-version.json`） |
+| 版本 | 随上游发布 | 当前为 **v1.7.3**（见 `backend-version.json`） |
 | 界面 | 上游 | 独立 Qt 应用，中英双语 |
 | 发行包 | 上游项目 | 便携 ZIP、SHA-256、构建信息、许可与源码 |
 | 许可 | 上游 | JustDLSS5 代码采用 MIT；保留上游版权 |
@@ -153,7 +153,7 @@ python autopilot_desktop.py
 build-desktop.bat
 ```
 
-输出路径：`dist/v0.2.4/JustDLSS5/JustDLSS5.exe`。请保留同目录下的 `_internal`。
+输出路径：`dist/v0.2.5/JustDLSS5/JustDLSS5.exe`。请保留同目录下的 `_internal`。
 
 维护说明：[docs/MAINTAINING.zh-CN.md](docs/MAINTAINING.zh-CN.md)。
 
@@ -175,11 +175,11 @@ build-desktop.bat
 ## 文档
 
 - [玩家测试说明](docs/TESTING-PREVIEW.zh-CN.md)
-- [v0.2.4 说明](docs/RELEASE-v0.2.4.md)
+- [v0.2.5 说明](docs/RELEASE-v0.2.5.md)
 - [第三方声明](docs/THIRD-PARTY-NOTICES.md)
 - [维护说明](docs/MAINTAINING.zh-CN.md)
 - [上游与来源](docs/UPSTREAM-AND-SOURCES.zh-CN.md) · [上游 README](docs/UPSTREAM_README.md)
 
 ---
 
-<p align="center">JustDLSS5 · v0.2.4 玩家测试版 · MIT · 社区工具，与 NVIDIA 无关</p>
+<p align="center">JustDLSS5 · v0.2.5 玩家测试版 · MIT · 社区工具，与 NVIDIA 无关</p>
