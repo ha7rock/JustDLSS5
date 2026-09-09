@@ -110,7 +110,7 @@ def main():
     for name in ("LGPL-3.0-only.txt", "GPL-3.0-only.txt"):
         if not (legal / "qtbase/LICENSES" / name).is_file():
             raise SystemExit(f"Required Qt license missing: {name}")
-    for name in ("PySide6-Essentials", "shiboken6", "pyinstaller"):
+    for name in ("PySide6-Essentials", "shiboken6", "pyinstaller", "certifi"):
         package = distribution(name)
         for file in package.files or ():
             if "licenses" in file.parts:
@@ -127,7 +127,7 @@ def main():
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     manifest = {"version": VERSION, "commit": commit, "python": platform.python_version(),
                 "openssl": ssl.OPENSSL_VERSION, "pyside": distribution("PySide6-Essentials").version,
-                "pyinstaller": distribution("pyinstaller").version,
+                "pyinstaller": distribution("pyinstaller").version, "certifi": distribution("certifi").version,
                 "workflow": os.environ.get("GITHUB_RUN_ID"),
                 "engine": json.loads((ROOT / "backend-version.json").read_text(encoding="utf8")),
                 "files": {p.relative_to(app).as_posix(): sha256(p) for p in sorted(app.rglob("*"))

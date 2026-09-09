@@ -244,7 +244,7 @@ class DesktopTests(unittest.TestCase):
         target = original.game.folder / "Bin" / "Win64" / "real.exe"
         original.game.candidates = [original.game.exe, target]
         service = BackendService()
-        with patch.object(games, "enrich", side_effect=lambda g: g), \
+        with patch.object(games, "enrich", side_effect=lambda g, **kwargs: g) as enrich, \
              patch.object(service, "decorate", side_effect=lambda g: LibraryEntry(g, False)):
             changed = service.select_executable(original, target)
         self.assertEqual(changed.key, original.key)
@@ -253,6 +253,7 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(changed.game.exe, target)
         self.assertEqual(changed.game.candidates, original.game.candidates)
         self.assertNotEqual(original.game.exe, target)
+        self.assertTrue(enrich.call_args.kwargs["chosen"])
 
     def test_anticheat_warning_survives_language_change(self):
         self.service.entries[1].anticheat = "BattlEye"
@@ -366,7 +367,7 @@ class DesktopTests(unittest.TestCase):
         icons._extract.cache_clear()
 
     def test_scan_filters_uninstalled_folder_remnants(self):
-        from core import video
+        from core import video, library
         folder = Path(self.temp.name)
         live = games.Game(name="Live", folder=folder, exe=folder / "game.exe")
         live.exe.touch()
@@ -377,11 +378,37 @@ class DesktopTests(unittest.TestCase):
         service = BackendService()
         events = []
         with patch.object(games, "scan_all", return_value=[live, empty, stale]), \
+             patch.object(library, "FILE", folder / "library.json"), \
+             patch.object(service, "hardware", return_value=("Test GPU", 120)), \
              patch.object(video, "known", return_value=None), \
              patch.object(service, "decorate", side_effect=lambda g: LibraryEntry(g, False)):
             result = service.scan(lambda *event: events.append(event))
         self.assertEqual([e.game.name for e in result], ["Live"])
         self.assertEqual(len(events), 2)
+
+    def test_opti_build_and_vr_options_follow_route(self):
+        self.select_game()
+        from dataclasses import replace
+        self.window._apply_options(replace(self.window.options, opti_build="wilsjo2", vr=True))
+        self.assertEqual(self.window._options().opti_build, "wilsjo2")
+        self.assertFalse(self.window._options().vr)
+        self.window._combo(self.window.route_combo, dlss.FEEDER)
+        self.assertTrue(self.window.vr_check.isEnabled())
+        self.window.vr_check.setChecked(True)
+        self.assertTrue(self.window._options().vr)
+        self.window.current.game.bitness = 32
+        self.window._route_changed()
+        self.assertFalse(self.window._options().vr)
+
+    def test_openxr_cancel_does_not_install(self):
+        from PySide6.QtWidgets import QMessageBox
+        self.select_game()
+        self.window._combo(self.window.route_combo, dlss.FEEDER)
+        self.window.vr_check.setChecked(True)
+        with patch.object(QMessageBox, "warning", return_value=QMessageBox.StandardButton.No):
+            self.window.install_selected()
+        self.assertFalse(self.service.installs)
+        self.assertIsNone(self.window.busy_job)
 
     def test_remaining_components_stay_available_for_uninstall(self):
         item = games.Game(name="Removed game", folder=Path(self.temp.name))

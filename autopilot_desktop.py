@@ -20,6 +20,9 @@ def main():
         dxvk.add_argument("--no-dxvk", action="store_true")
         parser.add_argument("--remix-swap", action="store_true")
         parser.add_argument("--video", action="store_true")
+        parser.add_argument("--vr", action="store_true")
+        from frontend.backend import optiscaler
+        parser.add_argument("--opti-build", choices=tuple(key for key in optiscaler.BUILDS if key))
         args = parser.parse_args()
         if not args.target and not args.video:
             parser.error("请指定游戏目录 / A game target is required")

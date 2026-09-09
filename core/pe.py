@@ -22,6 +22,9 @@ _SKIP_PARTS = (
     "crashhandler", "crashreport", "crashpad", "easyanticheat", "battleye",
     "touchup", "installer", "activation", "cleanup", "helper", "webhelper",
     "unitycrashhandler", "ue4prereqsetup", "ue5prereqsetup", "epicwebhelper",
+    # The feeder's 32-bit helper, which our own install puts under host64\.
+    # Ranked above a 32-bit game executable it was taken for the game.
+    "dlss5-feed-host",
 )
 
 
@@ -55,8 +58,15 @@ def exe_bitness(path: Path) -> int:
     raise PEError(f"Unsupported machine type: 0x{machine:04x}")
 
 
-def pe_imports(path: Path) -> list[str]:
-    """Lower-cased DLL names from the executable's static import table.
+def pe_imports(path: Path, delay: bool = False) -> list[str]:
+    """Lower-cased DLL names from the executable's import table.
+
+    `delay` reads the DELAY-LOAD table instead of the static one. A delay
+    import is still a dependency the linker recorded - the loader just
+    resolves it on first use - and some engines link d3d9.dll for something
+    old while delay-loading the renderer they actually draw with (Grand
+    Theft Auto V, issue #77: read as a DirectX 9 game and sent to a route
+    that has nothing for it).
 
     Returns an empty list if anything cannot be parsed - that is not an
     error, just "unknown".
@@ -99,7 +109,15 @@ def pe_imports(path: Path) -> list[str]:
             else:
                 return []
 
-            imp = at(opt + dd + 8, 4)
+            # Data directory 1 is the import table, 13 the delay-load one.
+            # NumberOfRvaAndSizes sits just before the directories and says
+            # how many there are; an image with fewer would have this read
+            # land in the section table instead.
+            want = 13 if delay else 1
+            n_dirs = struct.unpack_from("<I", at(opt + dd - 4, 4) or b"\0" * 4, 0)[0]
+            if n_dirs <= want:
+                return []
+            imp = at(opt + dd + want * 8, 4)
             if len(imp) < 4:
                 return []
             import_rva = struct.unpack_from("<I", imp, 0)[0]
@@ -122,11 +140,23 @@ def pe_imports(path: Path) -> list[str]:
             if desc is None:
                 return []
 
-            # Import descriptors are 20-byte records; grab them in one read.
-            table = at(desc, 20 * 1024)
+            # Import descriptors are 20-byte records, delay-load ones 32,
+            # with the DLL name at a different offset; grab them in one read.
+            step, name_at = (32, 4) if delay else (20, 12)
+            table = at(desc, step * 1024)
             names: list[str] = []
-            for i in range(len(table) // 20):
-                name_rva, first_thunk = struct.unpack_from("<II", table, i * 20 + 12)
+            for i in range(len(table) // step):
+                if delay:
+                    attrs, name_rva = struct.unpack_from("<II", table, i * step)
+                    first_thunk = name_rva
+                    # Attributes bit 0 clear means the old linkers wrote
+                    # virtual addresses here, not RVAs; those cannot be
+                    # resolved without the image base, so they are skipped.
+                    if name_rva and not (attrs & 1):
+                        continue
+                else:
+                    name_rva, first_thunk = struct.unpack_from(
+                        "<II", table, i * step + name_at)
                 if name_rva == 0 and first_thunk == 0:
                     break
                 n_off = to_off(name_rva)
@@ -237,18 +267,70 @@ def detect_api(path: Path) -> tuple[str, str]:
     if has("vulkan-1.dll"):
         return "Vulkan", "imports vulkan-1.dll, no DXGI"
     if has("opengl32.dll"):
+        engine = _engine_default(path)
+        if engine:
+            return engine
         return "OpenGL", "imports opengl32.dll, no DXGI"
     if has("d3d9.dll"):
-        # A real DirectX 9 game does not ship DLSS. Red Dead Redemption 2
-        # imports d3d9.dll and no DXGI at all, yet renders through D3D12 (or
-        # Vulkan) - taking the legacy import at face value put it on the DX9
-        # route, where nothing it needs is offered (issue #12).
+        # A d3d9.dll in the import table is the weakest evidence in the whole
+        # file. Engines keep it for a launcher, a video player, an old
+        # settings dialog or a compatibility path long after they stopped
+        # drawing with it: Red Dead Redemption 2 imports d3d9.dll and no DXGI
+        # at all yet renders with D3D12 (issue #12), and Grand Theft Auto V
+        # was read as a DirectX 9 game and sent to a route that has nothing
+        # for it (issue #77 - which of the readings below rescues it has not
+        # been checked on that executable). So every other kind of evidence
+        # is asked first, and only a game with nothing else anywhere is
+        # called DirectX 9.
         modern = _ships_dlss(path.parent)
         if modern:
             return ("DX12", f"imports d3d9.dll, but ships {modern} - the "
                             f"renderer is D3D12 or Vulkan, not DirectX 9. "
                             f"If the game is set to Vulkan, pick that in "
                             f"the settings before installing")
+        if _has_d3d12_agility_sdk(path.parent):
+            return ("DX12", "imports d3d9.dll, but ships a D3D12 Agility SDK "
+                            "- the renderer is D3D12, not DirectX 9")
+        # A delay-load is still a dependency the linker recorded; the loader
+        # simply resolves it on first use. d3d11/d3d12 there means the game
+        # draws with it. A bare dxgi.dll does not count: a DirectX 9 game
+        # can use DXGI on its own just to enumerate displays.
+        delayed = set(pe_imports(path, delay=True))
+        for dll, api, label in (("d3d12.dll", "DX12", "Direct3D 12"),
+                                ("d3d11.dll", "DX11", "Direct3D 11")):
+            if dll in delayed:
+                return (api, f"imports d3d9.dll, but delay-loads {dll} - the "
+                             f"renderer is {label} and the d3d9 import is a "
+                             f"leftover")
+        # Last: what the file says about itself - but only the parts of it
+        # that are records rather than text. _runtime_graphics ranks d3d11
+        # above d3d9, and every executable here has "d3d9.dll" in its bytes
+        # (the import table's own name string), so a game that merely
+        # MENTIONS d3d11.dll - SDL2 carries that literal for its render
+        # backend - would come back as D3D11 and be sent to a dxgi proxy it
+        # never loads. A 32-bit game reaching here is DirectX 9 in every
+        # case seen so far and has the most to lose from a wrong answer, so
+        # it is left alone entirely.
+        try:
+            wide = exe_bitness(path) == 64
+        except PEError:
+            # Unreadable is not evidence of anything; a game that cannot be
+            # parsed keeps the answer its import table already gave.
+            wide = False
+        if wide:
+            name, where = _runtime_graphics(path)
+            label = {"DX12": "Direct3D 12", "DX11": "Direct3D 11"}
+            # "named in the exe" is a string; an engine's marker file or
+            # another DLL's import table is a record. Only records count.
+            strong = where != "named in the exe"
+            if strong and name in ("d3d12.dll", "d3d11.dll"):
+                api = _RUNTIME_API[name]
+                return (api, f"imports d3d9.dll, but {name} is the one it "
+                             f"loads at run time ({where}) - the renderer is "
+                             f"{label[api]}, not DirectX 9")
+            if strong and name in label:
+                return (name, f"imports d3d9.dll, but {where} - the renderer "
+                              f"is {label[name]}, not DirectX 9")
         return "DX9", "imports d3d9.dll, no DXGI"
     if _has_d3d12_agility_sdk(path.parent):
         return ("DX12", "no graphics DLL imported statically, but ships a "
@@ -260,7 +342,9 @@ def detect_api(path: Path) -> tuple[str, str]:
     # still in the file, or in the engine DLL beside it.
     name, where = _runtime_graphics(path)
     if name:
-        api = _RUNTIME_API[name]
+        api = _RUNTIME_API.get(name, name)
+        if name not in _RUNTIME_API:
+            return api, where
         if api == "DX9" and _ships_dlss(path.parent):
             api = "DX12"
         return api, f"loads {name} at run time ({where}); no static graphics import"
@@ -277,11 +361,35 @@ _RUNTIME_API = {
 _RUNTIME_SCAN_MAX = 512 * 1024 * 1024
 # Files our own routes (or ReShade, DXVK, OptiScaler) drop beside a game;
 # their imports say nothing about the game.
-_NOT_THE_GAME = set(_RUNTIME_API) | {"reshade32.dll", "reshade64.dll",
-                                     "reshade.dll", "d3d8.dll", "ddraw.dll",
-                                     "dinput8.dll", "winmm.dll", "version.dll",
-                                     "nvngx_dlssnr.dll", "nvngx_dlss.dll",
-                                     "optiscaler.dll", "dlss5-bridge.dll"}
+_NOT_THE_GAME = set(_RUNTIME_API) | {
+    "reshade32.dll", "reshade64.dll", "reshade.dll", "d3d8.dll", "ddraw.dll",
+    "dinput8.dll", "winmm.dll", "version.dll", "dbghelp.dll", "winhttp.dll",
+    "wininet.dll", "d3dcompiler_47.dll",
+    "nvngx_dlssnr.dll", "nvngx_dlss.dll", "nvngx_dlssd.dll", "nvngx_dlssg.dll",
+    "_nvngx.dll", "nvngx-wrapper.dll", "remix_nvngx.dll",
+    "optiscaler.dll", "dlss5-bridge.dll", "dlss-enabler.dll",
+    "dlss-enabler-headless.dll", "rtx40mfgcore.dll",
+    "sl.interposer.dll", "sl.common.dll", "sl.reflex.dll", "sl.dlss.dll",
+    "sl.dlss_g.dll", "sl.dlss_d.dll", "sl.pcl.dll",
+    "libxess.dll", "libxess_dx11.dll", "libxess_fg.dll", "libxell.dll",
+    "amd_fidelityfx_dx12.dll", "amd_fidelityfx_vk.dll",
+    "amd_fidelityfx_upscaler_dx12.dll", "amd_fidelityfx_framegeneration_dx12.dll",
+    "amd_fidelityfx_loader_dx12.dll",
+    "ffx_fsr2_api_x64.dll", "ffx_fsr2_api_dx12_x64.dll", "ffx_fsr2_api_vk_x64.dll",
+    "ffx_fsr3upscaler_x64.dll", "ffx_backend_dx12_x64.dll", "ffx_backend_vk_x64.dll",
+}
+
+
+def _ours_in(folder: Path) -> set[str]:
+    """Names the tool's own manifest in this folder says it wrote."""
+    import json
+    try:
+        data = json.loads((folder / "dlss5-autopilot.json").read_text(encoding="utf8"))
+        files = data.get("files") if isinstance(data, dict) else None
+        return {str(f).replace("\\", "/").rsplit("/", 1)[-1].lower()
+                for f in (files or []) if isinstance(f, str)}
+    except (OSError, ValueError):
+        return set()
 
 
 def _names_in(path: Path) -> set[str]:
@@ -308,34 +416,96 @@ def _names_in(path: Path) -> set[str]:
     return found
 
 
+# An engine module beside the exe that settles the renderer by itself. Unity
+# names every backend it can drive (d3d11, d3d12, opengl32, vulkan-1) in
+# UnityPlayer.dll and in older players in the exe, and picks Direct3D 11 on
+# Windows unless the game is started with -force-glcore/-force-vulkan/
+# -force-d3d12. Taking opengl32.dll from those strings put Cities: Skylines
+# II, House Party and every other Unity game on the OpenGL route, where the
+# game never loads opengl32.dll and ReShade never appears (issues #46-#48).
+_ENGINE_DEFAULT = {
+    "unityplayer.dll": ("DX11", "Unity player beside the exe - Direct3D 11 "
+                                "on Windows unless the game is started with "
+                                "-force-d3d12, -force-vulkan or -force-glcore"),
+}
+# How many of the largest DLLs beside the exe get their strings read when
+# their import tables name no renderer either. An engine DLL of a few MB
+# that LoadLibrary()s its backend is the usual case.
+_RUNTIME_SIBLING_STRINGS = 6
+_RUNTIME_SIBLING_MIN = 512 * 1024
+_RUNTIME_SIBLING_MAX = 64 * 1024 * 1024
+# Named by engines that can drive several backends, used by few: a lone
+# mention in the exe is not yet the renderer.
+_AMBIGUOUS = {"opengl32.dll", "vulkan-1.dll"}
+
+
+def _engine_default(exe: Path, names: dict[str, Path] | None = None) -> tuple[str, str] | None:
+    """(api, reason) when an engine module beside the exe settles it."""
+    if names is None:
+        try:
+            names = {p.name.lower(): p for p in exe.parent.iterdir()
+                     if p.suffix.lower() == ".dll"}
+        except OSError:
+            return None
+    for n, hit in _ENGINE_DEFAULT.items():
+        if n in names and names[n].is_file():
+            return hit
+    return None
+
+
 def _runtime_graphics(exe: Path) -> tuple[str, str]:
     """(dll name, where it was seen) for a renderer loaded at run time.
 
-    The exe's own strings first; then the static imports of the DLLs beside
-    it (an engine DLL that imports d3d9.dll is the renderer). Proxy DLLs and
-    the files our routes place are not consulted.
+    A known engine module beside the exe decides first. Then the exe's own
+    strings: a Direct3D name there is taken as it stands (Call of Juarez:
+    Gunslinger names d3d9.dll and nothing else - #31), because the DLLs
+    beside a game mention renderers of their own (Bink, CEF, SDL name
+    d3d11.dll) and must not overrule the game. Only when the exe names
+    nothing, or nothing but opengl32.dll / vulkan-1.dll - which engines
+    that can drive several backends name without using - are the DLLs
+    beside it consulted: their import tables, then the strings of the
+    largest of them, ranked in the static table's order so a Direct3D
+    name outranks OpenGL or Vulkan. Proxy DLLs and the files our routes
+    place are not consulted.
     """
-    found = _names_in(exe)
-    for n in _RUNTIME_API:              # dict order is the priority order
-        if n in found:
-            return n, "named in the exe"
     try:
-        sibs = sorted(p for p in exe.parent.iterdir()
-                      if p.is_file() and p.suffix.lower() == ".dll"
-                      and p.name.lower() not in _NOT_THE_GAME)[:60]
+        names = {p.name.lower(): p for p in exe.parent.iterdir()
+                 if p.suffix.lower() == ".dll"}
     except OSError:
-        return "", ""
-    best = ""
-    best_from = ""
+        names = {}
+    engine = _engine_default(exe, names)
+    if engine:
+        return engine
+    found = _names_in(exe)
+    own = next((n for n in _RUNTIME_API if n in found), "")
+    if own and own not in _AMBIGUOUS:
+        return own, "named in the exe"
+    seen: dict[str, str] = {}
+    if own:
+        seen[own] = "named in the exe"
+    ours = _NOT_THE_GAME | _ours_in(exe.parent)
+    sibs = sorted((p for n, p in names.items() if n not in ours
+                   and p.is_file()), key=lambda p: p.name.lower())[:60]
     for dll in sibs:
         for imp in pe_imports(dll):
             base = imp.rsplit("/", 1)[-1]
             if base in _RUNTIME_API:
-                rank = list(_RUNTIME_API).index(base)
-                if not best or rank < list(_RUNTIME_API).index(best):
-                    best, best_from = base, dll.name
-    if best:
-        return best, f"{best_from} beside the exe imports it"
+                seen.setdefault(base, f"{dll.name} beside the exe imports it")
+
+    def _size(p: Path) -> int:
+        try:
+            return p.stat().st_size
+        except OSError:
+            return 0
+    big = sorted((p for p in sibs
+                  if _RUNTIME_SIBLING_MIN <= _size(p) <= _RUNTIME_SIBLING_MAX),
+                 key=lambda p: -_size(p))[:_RUNTIME_SIBLING_STRINGS]
+    for dll in big:
+        for n in _names_in(dll):
+            seen.setdefault(n, f"named in {dll.name} beside the exe")
+    for n in _RUNTIME_API:              # dict order is the priority order
+        if n in seen:
+            return n, seen[n]
     return "", ""
 
 
@@ -353,6 +523,7 @@ _PRUNE_DIRS = {
     "support", "docs", "manual", "soundtrack", "artbook", "extras", "dxsetup",
     "crashreportclient", "epicwebhelper", "thirdparty", "steamvr", "openvr",
     "__installer", "dotnetfx", "movies", "content", "data", "assets", "textures",
+    "host64",
 }
 _MAX_DEPTH = 5
 

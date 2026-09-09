@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import time
 import sys
+import ssl
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -16,6 +17,10 @@ from frontend.about import VERSION
 
 def main():
     exe = Path(os.environ.get("STUDIO_DIST_DIR", ROOT / "dist" / ("v" + VERSION))) / "JustDLSS5/JustDLSS5.exe"
+    certificates = exe.parent / "_internal/certifi/cacert.pem"
+    context = ssl.create_default_context(cafile=str(certificates))
+    if not context.get_ca_certs() or not context.check_hostname:
+        raise RuntimeError("Packaged CA certificates are missing or unusable")
     user32 = ctypes.windll.user32
     callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]

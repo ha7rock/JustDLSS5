@@ -173,7 +173,9 @@ class MainWindow(QMainWindow):
         self.search_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
         self.search_shortcut.activated.connect(self.focus_search)
         if background:
-            self._submit(lambda emit: self.service.hardware(), self._hardware)
+            self._submit(self.service.load_library, self._library_loaded, busy=True,
+                         title=self.t("正在读取游戏库…", "Loading game library…"),
+                         controls=(self.scan_button, self.empty_scan_button))
             if prefs.get("product_update_check", True) and updates.check_due(prefs.get("product_update_checked", 0), time.time()):
                 self.check_product_update(automatic=True)
 
@@ -463,6 +465,20 @@ class MainWindow(QMainWindow):
         for value in optiscaler.PROXY_NAMES:
             self.opti_proxy.addItem(value, value)
         form.addRow(self.t("OptiScaler 加载名称", "OptiScaler proxy"), self.opti_proxy)
+        self.opti_build = ComboBox()
+        build_labels = {
+            "": self.t("Dagherbou（默认）", "Dagherbou (default)"),
+            "y4my4my4m": self.t("y4my4my4m · RTX 40 多帧生成", "y4my4my4m · RTX 40 MFG"),
+            "wilsjo2": self.t("wilsjo2 · PreSR（实验性，未实测）", "wilsjo2 · PreSR (experimental, untested)"),
+        }
+        for key, description in optiscaler.BUILDS.items():
+            self.opti_build.addItem(build_labels.get(key, description), key)
+        form.addRow(self.t("OptiScaler 分支", "OptiScaler build"), self.opti_build)
+        self.vr_check = QCheckBox(self.t("OpenXR（实验性，未实测）", "OpenXR (experimental, untested)"))
+        self.vr_check.setToolTip(self.t(
+            "注册当前 Windows 用户的全局 OpenXR 层，影响其他 OpenXR 应用。不支持 OpenVR / SteamVR。",
+            "Registers an OpenXR layer for this Windows user, affecting other OpenXR apps. OpenVR / SteamVR is unsupported."))
+        form.addRow(self.vr_check)
         self.dxvk_check = QCheckBox("DXVK  ·  DirectX → Vulkan")
         form.addRow(self.dxvk_check)
         self.remix_swap = QCheckBox(self.t("替换 Remix 运行时（实验性）", "Replace Remix runtime (experimental)"))
@@ -626,6 +642,13 @@ class MainWindow(QMainWindow):
         self.gpu_label.setText(result[0] or self.t("未检测到 NVIDIA 显卡", "No NVIDIA GPU detected"))
         self.language.setEnabled(not self.jobs.active)
 
+    def _library_loaded(self, entries):
+        self._hardware(self.service.hardware())
+        self._scanned(entries)
+        if entries:
+            self.scan_feedback.setText(self.t("已读取上次游戏库，可重新扫描。", "Previous library loaded. Rescan to find new games."))
+            self.scan_feedback.show()
+
     def scan(self):
         if self.busy_job is not None:
             return
@@ -753,9 +776,10 @@ class MainWindow(QMainWindow):
         self.remix_swap.setChecked(options.remix_swap)
         self.fg_check.setChecked(options.fg)
         self.mfg_check.setChecked(options.mfg)
+        self.vr_check.setChecked(options.vr)
         for combo, value in ((self.provider_combo, options.provider), (self.preset_combo, options.feed.get("preset", next(iter(feedcfg.PRESETS)))),
                              (self.hdr_combo, options.feed.get("hdr", next(iter(feedcfg.HDR)))), (self.proxy_combo, options.reshade_proxy),
-                             (self.opti_proxy, options.opti_proxy), (self.nr_preset, options.nr.get("Preset", 0)),
+                             (self.opti_proxy, options.opti_proxy), (self.opti_build, options.opti_build), (self.nr_preset, options.nr.get("Preset", 0)),
                              (self.nr_style, options.nr.get("Style", 0))):
             self._combo(combo, value)
         self.quality_combo.setCurrentIndex(3)
@@ -786,6 +810,8 @@ class MainWindow(QMainWindow):
                        dxvk=self.dxvk_check.isChecked(), remix_swap=self.remix_swap.isChecked(),
                        fg=self.fg_check.isEnabled() and self.fg_check.isChecked(),
                        mfg=self.mfg_check.isEnabled() and self.mfg_check.isChecked(),
+                       vr=self.vr_check.isEnabled() and self.vr_check.isChecked(),
+                       opti_build=self.opti_build.currentData() or "",
                        renodx_local=self.local_addon, reshade_proxy=self.proxy_combo.currentData() or "",
                        opti_proxy=self.opti_proxy.currentData() or "", feeder_prerelease=feeder == "__pre__",
                        feeder_tag="" if feeder == "__pre__" else feeder,
@@ -823,6 +849,11 @@ class MainWindow(QMainWindow):
         self.nr_preset.setEnabled(route == dlss.OPTI)
         self.nr_style.setEnabled(route == dlss.OPTI)
         self.opti_proxy.setEnabled(route == dlss.OPTI)
+        self.opti_build.setEnabled(route == dlss.OPTI)
+        vr_available = route not in (dlss.OPTI, dlss.REMIX) and (self.current.game.bitness or 64) == 64
+        self.vr_check.setEnabled(vr_available)
+        if not vr_available:
+            self.vr_check.setChecked(False)
         self.fg_check.setEnabled(route == dlss.OPTI and self.current.game.api == "DX12")
         self.mfg_check.setEnabled(self.inspection.mfg_available and route not in (dlss.OPTI, dlss.REMIX))
         if not self.fg_check.isEnabled():
@@ -875,6 +906,12 @@ class MainWindow(QMainWindow):
             return
         entry, options = self.current, self._options()
         if not self._confirm_anticheat([entry]):
+            return
+        if options.vr and QMessageBox.warning(self, "OpenXR", self.t(
+                "此功能尚未实测。安装会为当前 Windows 用户注册全局 OpenXR 层，影响其他 OpenXR 应用。仅支持 OpenXR，不支持 OpenVR / SteamVR。继续安装？",
+                "This feature is untested. Installation registers a global OpenXR layer for this Windows user, affecting other OpenXR apps. OpenVR / SteamVR is unsupported. Continue?"),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
         self._submit(lambda emit: self.service.install(entry, options, emit),
                      lambda report: self._installed(entry, report), busy=True,

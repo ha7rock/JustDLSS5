@@ -3,7 +3,7 @@ from dataclasses import dataclass, replace, field
 from pathlib import Path
 from stat import S_ISREG
 
-from .backend import games, gpu, dlss, installer, components, diagnose, video, sources, anticheat, mfg
+from .backend import games, gpu, dlss, installer, components, diagnose, video, sources, anticheat, mfg, library, update
 
 
 @dataclass
@@ -35,6 +35,29 @@ class Inspection:
 class BackendService:
     def __init__(self):
         self._gpu = None
+        self._entries = []
+
+    @staticmethod
+    def _cache_version():
+        return f"JustDLSS5-library-1:{update.VERSION}"
+
+    def _save_library(self):
+        library.save([entry.game for entry in self._entries], {}, self._cache_version(), self.hardware()[1])
+
+    def load_library(self, emit):
+        cached = library.load(self._cache_version(), self.hardware()[1])
+        if cached is None:
+            return []
+        found, _, changed = cached
+        for game in changed:
+            games.enrich(game, chosen=bool(game.exe and game.exe.is_file()))
+        self._entries = [self.decorate(game) for game in found if self.has_game_files(game)]
+        self._save_library()
+        return self._entries
+
+    def _remember(self, entry):
+        self._entries = [item for item in self._entries if item.key != entry.key] + [entry]
+        self._save_library()
 
     def hardware(self):
         if self._gpu is None:
@@ -52,6 +75,8 @@ class BackendService:
                 entries.append(self.decorate(game))
             else:
                 emit("log", f"跳过残留目录（无游戏程序） / Skipped folder without a game executable: {game.folder}")
+        self._entries = entries
+        self._save_library()
         return entries
 
     @staticmethod
@@ -72,7 +97,9 @@ class BackendService:
         game = games.manual(Path(path))
         if not game.exe:
             raise ValueError("未找到游戏程序 / No game executable found")
-        return self.decorate(game)
+        entry = self.decorate(game)
+        self._remember(entry)
+        return entry
 
     def decorate(self, game):
         from .icons import game_icon
@@ -83,9 +110,12 @@ class BackendService:
     def select_executable(self, entry, path):
         game = replace(entry.game, exe=Path(path), candidates=[Path(path)],
                        emu=None, install_root=None, error="")
-        games.enrich(game)
-        game.candidates = list(entry.game.candidates)
-        return self.decorate(game)
+        games.enrich(game, chosen=True)
+        game.candidates = list(dict.fromkeys([*entry.game.candidates, Path(path)]))
+        selected = self.decorate(game)
+        if any(item.key == entry.key for item in self._entries):
+            self._remember(selected)
+        return selected
 
     def inspect(self, entry):
         game = entry.game

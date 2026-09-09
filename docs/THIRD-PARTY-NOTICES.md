@@ -32,3 +32,7 @@ License references:
 ## Downloaded game components
 
 The application ZIP does not include game files, NVIDIA models, ReShade, OptiScaler, Feeder, RenoDX add-ons, Remix mods or video tools. Features can download third-party components when selected. Those downloads retain their own terms and are not licensed by this application's MIT license. JustDLSS5 is an independent community project and is not affiliated with NVIDIA.
+
+## Certificate bundle
+
+certifi 2026.7.22 is bundled for HTTPS certificate verification (MPL-2.0). Its license is included under `LICENSES/certifi`; the unmodified source archive and checksum are included with the corresponding source materials. The Windows trust store remains enabled.

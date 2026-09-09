@@ -1,4 +1,4 @@
-"""Stage an upstream ref, validate it, then optionally replace only core/.
+"""Stage an upstream ref, validate it, then replace core/ and the upstream CLI.
 
 Usage: python tools/update_backend.py v1.6.1 [--apply]
 The default is a dry run. Close the app before using --apply.
@@ -33,7 +33,7 @@ def main():
         checkout = Path(work) / "upstream"
         run("git", "clone", "--bare", "--filter=blob:none", UPSTREAM, str(checkout))
         commit = run("git", "rev-parse", "--verify", args.ref + "^{commit}", cwd=checkout).decode().strip()
-        archive = run("git", "archive", commit, "core", cwd=checkout)
+        archive = run("git", "archive", commit, "core", "dlss5_autopilot.py", cwd=checkout)
         candidate = Path(work) / "candidate"
         candidate.mkdir()
         with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
@@ -49,10 +49,10 @@ def main():
                         shutil.copyfileobj(source, dest)
         shutil.copytree(ROOT / "frontend", candidate / "frontend", ignore=shutil.ignore_patterns("__pycache__"))
         shutil.copytree(ROOT / "tools", candidate / "tools", ignore=shutil.ignore_patterns("__pycache__"))
-        for filename in ("test_ui.py", "test_cli.py", "test_product.py", "test_reshade_ini.py",
-                         "autopilot_desktop.py", "dlss5_autopilot.py"):
+        for filename in ("test_ui.py", "test_cli.py", "test_product.py", "test_reshade_ini.py", "test_upstream.py",
+                         "autopilot_desktop.py"):
             shutil.copy2(ROOT / filename, candidate / filename)
-        for script in ("tools/check_backend.py", "test_ui.py", "test_cli.py", "test_product.py", "test_reshade_ini.py"):
+        for script in ("tools/check_backend.py", "test_ui.py", "test_cli.py", "test_product.py", "test_reshade_ini.py", "test_upstream.py"):
             subprocess.run([sys.executable, script], cwd=candidate, check=True)
         print("Validated backend commit:", commit)
         if not args.apply:
@@ -66,11 +66,17 @@ def main():
         backup = backups / stamp
         prepared = backups / (stamp + "-incoming")
         shutil.copytree(candidate / "core", prepared)
+        cli_backup = backups / (stamp + "-cli.py")
+        shutil.copy2(ROOT / "dlss5_autopilot.py", cli_backup)
         (ROOT / "core").rename(backup)
         try:
             prepared.rename(ROOT / "core")
+            shutil.copy2(candidate / "dlss5_autopilot.py", ROOT / "dlss5_autopilot.py")
         except BaseException:
+            if (ROOT / "core").exists():
+                (ROOT / "core").rename(backups / (stamp + "-failed"))
             backup.rename(ROOT / "core")
+            shutil.copy2(cli_backup, ROOT / "dlss5_autopilot.py")
             raise
         (ROOT / "backend-version.json").write_text(json.dumps(
             {"repository": UPSTREAM, "commit": commit, "ref": args.ref,
