@@ -30,6 +30,9 @@ class Inspection:
     levels: dict = field(default_factory=dict)
     api_override: str = ""
     mfg_available: bool = False
+    driver: str = ""
+    hdr: bool = False
+    vendor: str = ""
 
 
 class BackendService:
@@ -134,7 +137,9 @@ class BackendService:
                   for route in support.options}
         return Inspection(entry, support, fit, options, name or "", level, explanation, levels,
                           games.api_override(game.folder),
-                          mfg.applies(sm, game.api, game.install_dir, game.folder)[0])
+                          mfg.applies(sm, game.api, game.install_dir, game.folder)[0],
+                          gpu.driver_version() or "", gpu.hdr_on() is True,
+                          (gpu.other_vendor() or "") if not name else "")
 
     def set_graphics_api(self, entry, api):
         if api and api not in games.APIS:
@@ -155,9 +160,25 @@ class BackendService:
         return "\n".join(installer.preview_lines(installer.preview(entry.game, options)))
 
     def diagnose(self, entry):
-        report = diagnose.analyse(entry.game.install_dir)
-        return report.verdict + "\n\n" + "\n\n".join(
-            f"[{item.level}] {item.title}\n{item.detail}" for item in report.findings)
+        from .session import analyse
+        return analyse(entry).text
+
+    def session_report(self, entry, target):
+        from .session import analyse
+        from .backend import prefs
+        prefs.set_("target_fps", target)
+        return analyse(entry, target)
+
+    def apply_tune(self, entry, result):
+        from .session import apply
+        return apply(entry, result)
+
+    def community_report(self, entry, route):
+        from .backend import community
+        data = community.fetch()
+        lines = community.advice(community.for_game(data, entry.game), route, gpu.driver_version() or "")
+        return "来源 / Source: DLSS5-Autopilot community reports\n\n" + "\n".join(lines or [
+            "暂无足够的社区记录（至少 5 份）；这不代表兼容。 / Insufficient reports (minimum 5); compatibility is unknown."])
 
     def versions(self, entry):
         return "\n".join(f"{item.name}\n  {item.installed or '—'} → {item.latest or '—'}"

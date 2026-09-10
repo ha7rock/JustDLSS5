@@ -136,5 +136,89 @@ class UpstreamTests(unittest.TestCase):
         self.assertEqual(diagnose._last_session(marker + " old\n" + marker + " current"), marker + " current")
 
 
+    def test_vulkan_32_and_64_manifests_have_distinct_names(self):
+        import json
+        from core import vulkan
+        archive = self.root / "reshade.zip"
+        with zipfile.ZipFile(archive, "w") as output:
+            for dll, manifest in ((vulkan.DLL, vulkan.MANIFEST), (vulkan.DLL32, vulkan.MANIFEST32)):
+                output.writestr(dll, b"fixture")
+                output.writestr(manifest, json.dumps({"layer": {"name": vulkan.LAYER_NAME}}))
+        for dll, manifest in ((vulkan.DLL, vulkan.MANIFEST), (vulkan.DLL32, vulkan.MANIFEST32)):
+            vulkan._place(archive, self.folder, dll, manifest)
+        self.assertNotEqual(vulkan.layer_name(self.folder / vulkan.MANIFEST),
+                            vulkan.layer_name(self.folder / vulkan.MANIFEST32))
+
+    def test_archive_paths_cannot_escape_target(self):
+        for path in ("../escape.dll", "..\\escape.dll", str(self.root / "outside.dll")):
+            with self.subTest(path=path), self.assertRaises(net.OutsideError):
+                net.inside(self.folder, path)
+        self.assertEqual(net.inside(self.folder, "bin/runtime.dll"), self.folder / "bin/runtime.dll")
+
+    def test_analysis_proposes_without_writing_game_config(self):
+        from types import SimpleNamespace
+        from core import prefs, dlss, wincrash
+        from frontend.session import analyse
+        config = self.folder / "dlss5-feed.cfg"
+        config.write_text("work_resolution=100\n")
+        (self.folder / diagnose.FEED_LOG).write_text("3600 frames: feed CPU 1.0 ms/frame 47 fps")
+        report = SimpleNamespace(verdict="Working.", ran=True, findings=[])
+        with patch.object(diagnose, "analyse", return_value=report), \
+             patch.object(diagnose, "_manifest", return_value={"path": dlss.FEEDER}), \
+             patch.object(diagnose, "_installed_at", return_value=1), \
+             patch.object(wincrash, "last_crash", return_value=None), \
+             patch.object(prefs, "FILE", self.root / "prefs.json"):
+            result = analyse(LibraryEntry(self.game, True), 60)
+        self.assertGreater(result.resolution, 0)
+        self.assertLess(result.resolution, 100)
+        self.assertEqual(config.read_text(), "work_resolution=100\n")
+
+    def test_tuning_applies_only_to_matching_install_and_settings(self):
+        from core import dlss
+        from frontend.session import SessionResult, apply
+        config = self.folder / "dlss5-feed.cfg"
+        config.write_text("work_resolution=100\n")
+        result = SessionResult("", str(self.folder), dlss.FEEDER, 75, 100)
+        item = LibraryEntry(self.game, True)
+        with patch.object(installer, "options_from_manifest", return_value=installer.Options(path=dlss.OPTI)):
+            with self.assertRaises(ValueError):
+                apply(item, result)
+        with patch.object(installer, "options_from_manifest", return_value=installer.Options(path=dlss.FEEDER)):
+            self.assertEqual(apply(item, result), 75)
+            with self.assertRaises(ValueError):
+                apply(item, result)
+        self.assertEqual(float(feedcfg.read(config)["work_resolution"]), 75)
+
+    def test_silent_opti_write_failure_is_reported(self):
+        from core import dlss
+        from frontend.session import SessionResult, apply
+        (self.folder / "OptiScaler.ini").write_text("[DlssNr]\nWorkingScale=1.0\n")
+        result = SessionResult("", str(self.folder), dlss.OPTI, 75, 100)
+        with patch.object(installer, "options_from_manifest", return_value=installer.Options(path=dlss.OPTI)), \
+             patch.object(optiscaler, "enable_nr"):
+            with self.assertRaises(OSError):
+                apply(LibraryEntry(self.game, True), result)
+
+    def test_old_crash_cannot_override_latest_session(self):
+        from datetime import datetime, timezone, timedelta
+        from core import wincrash
+        from frontend.session import current_crash
+        (self.folder / "ReShade.log").write_text("new session")
+        old = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+        crash = wincrash.Crash(old, "game.exe", "game.exe", "0xc0000005", "Application Error")
+        self.assertFalse(current_crash(crash, self.folder))
+        crash.when = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        self.assertTrue(current_crash(crash, self.folder))
+
+    def test_overlay_key_preserves_other_settings(self):
+        from core import reshade_ini
+        config = self.folder / "ReShade.ini"
+        config.write_text("[INPUT]\nKeyOverlay=36,0,0,0\nKeyEffects=117,0,0,0\n")
+        reshade_ini.set_overlay_key(self.folder, 0x7A)
+        text = config.read_text()
+        self.assertIn("122,0,0,0", text)
+        self.assertIn("117,0,0,0", text)
+
+
 if __name__ == "__main__":
     unittest.main()

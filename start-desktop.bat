@@ -1,6 +1,6 @@
 @echo off
 setlocal
-set "app=%~dp0dist\v0.2.5\JustDLSS5\JustDLSS5.exe"
+set "app=%~dp0dist\v0.2.6\JustDLSS5\JustDLSS5.exe"
 if not exist "%app%" (
     echo JustDLSS5 has not been built. Run build-desktop.bat first.
     pause

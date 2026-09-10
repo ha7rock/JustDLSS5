@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
     QCheckBox, QToolButton, QPlainTextEdit, QProgressBar, QFileDialog, QMessageBox,
     QDialog, QMenu, QInputDialog, QSizePolicy, QStyle)
 
-from .backend import prefs, update, dlss, installer, feedcfg, reshade_ini, optiscaler, profiles, video, compare, remixlist, remixdl
+from .backend import prefs, update, dlss, installer, feedcfg, reshade_ini, optiscaler, profiles, video, compare, remixlist, remixdl, sources, gpu
 from .service import BackendService, LibraryEntry
 from .jobs import Jobs
 from .library import LibraryModel, LibraryFilter, LibraryTable
@@ -385,6 +385,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.route_combo)
         self.route_hint = label("", "muted", True)
         layout.addWidget(self.route_hint)
+        self.engine_warning = label("", "warning", True)
+        layout.addWidget(self.engine_warning)
         layout.addWidget(label(self.t("仅用于离线游戏 · 不支持反作弊环境", "Offline games only · not for anti-cheat environments"), "muted", True))
         layout.addWidget(label(self.t("画质方案", "Quality profile"), "muted"))
         self.quality_combo = ComboBox()
@@ -405,8 +407,19 @@ class MainWindow(QMainWindow):
         self.scale_slider.setValue(100)
         self.scale_slider.valueChanged.connect(lambda v: self.scale_value.setText(f"{v}%"))
         layout.addWidget(self.scale_slider)
+        target_row = row()
+        target_row.addWidget(label(self.t("目标帧率", "Target FPS"), "muted"))
+        self.target_fps = QLineEdit(str(prefs.get("target_fps") or "60"))
+        self.target_fps.setMaximumWidth(90)
+        self.target_fps.setMaxLength(3)
+        target_row.addWidget(self.target_fps)
+        self.session_button = button(self.t("运行分析", "Analyze"), self.analyse_session)
+        target_row.addStretch()
+        layout.addLayout(target_row)
+        layout.addWidget(self.session_button)
         self.keep_dlss = QCheckBox(self.t("保留游戏自带的 DLSS", "Keep the game's own DLSS"))
         self.keep_dlss.setChecked(True)
+        self.keep_dlss.clicked.connect(self._swap_warning)
         layout.addWidget(self.keep_dlss)
         self.advanced_toggle = QToolButton()
         self.advanced_toggle.setText(self.t("高级设置", "Advanced settings"))
@@ -484,15 +497,21 @@ class MainWindow(QMainWindow):
         self.remix_swap = QCheckBox(self.t("替换 Remix 运行时（实验性）", "Replace Remix runtime (experimental)"))
         form.addRow(self.remix_swap)
         self.version_combos = {}
-        for key, title in (("renodx", "DLSS 5 add-on"), ("dlssnr", "nvngx_dlssnr"), ("dlss", "nvngx_dlss")):
+        for key, title in (("renodx", "DLSS 5 add-on"), ("dlssnr", "nvngx_dlssnr"), ("dlss", "nvngx_dlss"), ("dlssd", self.t("光线重建", "Ray reconstruction"))):
             combo = ComboBox()
             combo.addItem(self.t("自动 / 推荐版本", "Automatic / recommended"), None)
+            if key == "dlssd":
+                combo.clear()
+                combo.addItem(self.t("保留游戏自带版本", "Keep the game's version"), "")
+                combo.activated.connect(self._swap_warning)
+                combo.setToolTip(self.t("仅替换游戏已有的光线重建组件；OptiScaler 和 Remix 路线不支持。", "Only replaces existing ray reconstruction; unavailable on OptiScaler and Remix routes."))
             self.version_combos[key] = combo
             if key == "renodx":
                 combo.activated.connect(self._online_addon)
             form.addRow(title, combo)
         self.feeder_combo = ComboBox()
         self.feeder_combo.addItem(self.t("最新正式版", "Latest stable"), "")
+        self.feeder_combo.currentIndexChanged.connect(self._route_changed)
         self.feeder_combo.addItem(self.t("最新预览版", "Latest preview"), "__pre__")
         form.addRow("Feeder", self.feeder_combo)
         form.addRow(button(self.t("加载版本列表", "Load available versions"), self.load_catalog))
@@ -815,7 +834,8 @@ class MainWindow(QMainWindow):
                        renodx_local=self.local_addon, reshade_proxy=self.proxy_combo.currentData() or "",
                        opti_proxy=self.opti_proxy.currentData() or "", feeder_prerelease=feeder == "__pre__",
                        feeder_tag="" if feeder == "__pre__" else feeder,
-                       **{key: combo.currentData() for key, combo in self.version_combos.items()})
+                       **{key: (combo.currentData() or "") if key == "dlssd" and combo.isEnabled() else
+                          "" if key == "dlssd" else combo.currentData() for key, combo in self.version_combos.items()})
 
     def _route_usable(self):
         return bool(self.inspection and self.inspection.support.supported and
@@ -845,6 +865,26 @@ class MainWindow(QMainWindow):
         self.scale_slider.setRange(optiscaler.NR_SCALE_MIN if route == dlss.OPTI else 50,
                                    optiscaler.NR_SCALE_MAX if route == dlss.OPTI else 100)
         self.scale_slider.setEnabled(work)
+        self.target_fps.setEnabled(work)
+        self.session_button.setEnabled(self.current.installed)
+        rr = self.version_combos["dlssd"]
+        rr.setEnabled(route not in (dlss.OPTI, dlss.REMIX) and any(
+            str(item).lower().endswith("nvngx_dlssd.dll") for item in self.inspection.support.evidence))
+        warnings = []
+        driver_warning = dlss.driver_warning(route, self.inspection.driver)
+        if driver_warning:
+            if gpu.driver_at_least("616.56", self.inspection.driver) is False:
+                warnings.append(self.t(f"驱动 {self.inspection.driver} 不支持神经渲染，请先更新驱动。", f"Driver {self.inspection.driver} predates neural rendering; update the driver first."))
+            else:
+                warnings.append(self.t(f"上游报告驱动 {self.inspection.driver} 存在崩溃风险。悬停查看说明。", f"Upstream reports crashes on driver {self.inspection.driver}. Hover for details."))
+        if not self.inspection.gpu_name and self.inspection.vendor:
+            warnings.append(self.t("当前显卡不支持本工具的神经渲染安装：", "Neural rendering installation is unavailable on: ") + self.inspection.vendor)
+        tag = self.feeder_combo.currentData() or ""
+        if self.inspection.hdr and route == dlss.FEEDER and tag not in ("", "__pre__") and sources.feeder_key(tag) < sources.feeder_key(sources.FEEDER_HDR_MIN):
+            warnings.append(self.t("此 Feeder 版本可能破坏 HDR 高光，请使用最新版本。", "This feeder build may damage HDR highlights; select the latest version."))
+        self.engine_warning.setToolTip(driver_warning or "")
+        self.engine_warning.setText("\n".join(warnings))
+        self.engine_warning.setVisible(bool(warnings))
         self.scale_label.setText(self.t("渲染区域", "Work area") if work else self.t("此路线由游戏控制画质", "Quality controlled in game"))
         self.nr_preset.setEnabled(route == dlss.OPTI)
         self.nr_style.setEnabled(route == dlss.OPTI)
@@ -863,6 +903,47 @@ class MainWindow(QMainWindow):
         self.remix_swap.setVisible(route == dlss.REMIX)
         self.install_button.setText(self.t("重新安装 / 更新", "Reinstall / update") if self.current.installed else self.t("安装 DLSS 5", "Install DLSS 5"))
         self.install_button.setEnabled(usable and self.busy_job is None)
+
+    def _swap_warning(self, *args):
+        rr = self.version_combos["dlssd"]
+        if self.current and (not self.keep_dlss.isChecked() or (rr.isEnabled() and rr.currentData())):
+            self.show_text(self.t("替换游戏组件", "Replace game components"), self.t(
+                "替换前会备份原文件，卸载时还原。启动器校验可能覆盖替换文件；反作弊可能将其视为篡改，请勿用于联网游戏。",
+                "Original files are backed up and restored on uninstall. Launcher verification may overwrite replacements; anti-cheat may treat them as tampering. Do not use online."))
+
+    def analyse_session(self):
+        if not self.current or not self.current.installed or self.busy_job:
+            return
+        entry = self.current
+        raw = self.target_fps.text().strip() if self.target_fps.isEnabled() else "0"
+        if not raw.isdecimal() or not 0 <= int(raw) <= 999:
+            self.show_text(self.t("目标帧率无效", "Invalid target FPS"), self.t("请输入 1–999，填 0 仅诊断。", "Enter 1–999, or 0 for diagnosis only."))
+            return
+        target = int(raw)
+        def done(result):
+            self._append_log(result.text)
+            dialog = QDialog(self)
+            dialog.setWindowTitle(self.t("运行诊断", "Session diagnosis"))
+            dialog.resize(680, 500)
+            layout = column(dialog, 20, 12)
+            text = QPlainTextEdit(result.text)
+            text.setReadOnly(True)
+            layout.addWidget(text)
+            if result.resolution:
+                apply_button = button(self.t(f"应用建议：{result.resolution}%（下次启动生效）", f"Apply {result.resolution}% (next launch)"), dialog.accept)
+                layout.addWidget(apply_button)
+            layout.addWidget(button(self.t("关闭", "Close"), dialog.reject))
+            if dialog.exec() == QDialog.DialogCode.Accepted and result.resolution:
+                self._submit(lambda emit: self.service.apply_tune(entry, result),
+                             lambda value: self.show_text(self.t("设置已保存", "Setting saved"), self.t(
+                                 f"渲染区域已设为 {value}%，下次启动游戏生效。", f"Work area set to {value}%; restart the game to apply.")),
+                             busy=True, title=self.t("正在保存设置…", "Saving settings…"), controls=(self.session_button,))
+        self._submit(lambda emit: self.service.session_report(entry, target), done, busy=True,
+                     title=self.t("正在读取运行记录…", "Reading session records…"), controls=(self.session_button,))
+
+    def community_report(self):
+        route = self.route_combo.currentData()
+        self._report(lambda entry: self.service.community_report(entry, route))
 
     def _quality_changed(self, *args):
         name = self.quality_combo.currentData()
@@ -927,7 +1008,7 @@ class MainWindow(QMainWindow):
         if report.warnings:
             self._append_log("\n".join(report.warnings))
         self.show_text(self.t("安装完成", "Installation complete"),
-            self.t("请以无边框或全屏模式运行游戏。ReShade 路线：按 Home 打开面板，F6 开关神经渲染。Remix 路线：按 Alt+X 打开 Remix 设置。\n\n32 位游戏请使用游戏内面板，不要切换到辅助进程窗口。", "Use borderless or fullscreen. ReShade routes: Home opens the overlay; F6 toggles neural rendering. Remix: Alt+X opens settings.\nFor 32-bit games, use the in-game overlay, not the helper window.") + "\n\n" + "\n".join(report.warnings))
+            self.t(f"面板快捷键：ReShade {reshade_ini.overlay_key_name()}，OptiScaler {reshade_ini.overlay_key_name('Insert')}，Remix Alt+X。ReShade 的 F6 开关神经渲染。32 位游戏请使用游戏内面板。", f"Overlay keys: ReShade {reshade_ini.overlay_key_name()}, OptiScaler {reshade_ini.overlay_key_name('Insert')}, Remix Alt+X. F6 toggles neural rendering in ReShade. Use the in-game overlay for 32-bit games.") + "\n\n" + "\n".join(report.warnings))
 
     def uninstall_selected(self):
         if not self.current or not self.current.installed or self.busy_job:
@@ -955,6 +1036,7 @@ class MainWindow(QMainWindow):
             return
         menu = QMenu(self)
         for title, callback in ((self.t("诊断安装问题", "Diagnose"), lambda: self._report(self.service.diagnose)),
+                                (self.t("社区兼容报告", "Community reports"), self.community_report),
                                 (self.t("检查组件版本", "Component versions"), lambda: self._report(self.service.versions)),
                                 (self.t("截图效果对比", "Screenshot comparison"), self.show_comparison),
                                 (self.t("打开游戏文件夹", "Open game folder"), lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.current.game.folder))))):
@@ -990,7 +1072,8 @@ class MainWindow(QMainWindow):
             for key, combo in self.version_combos.items():
                 selected = combo.currentData()
                 combo.clear()
-                combo.addItem(self.t("自动 / 推荐版本", "Automatic / recommended"), None)
+                combo.addItem(self.t("保留游戏自带版本", "Keep the game's version") if key == "dlssd" else
+                              self.t("自动 / 推荐版本", "Automatic / recommended"), "" if key == "dlssd" else None)
                 for item in catalog.get(self.addon_family if key == "renodx" else key, []):
                     combo.addItem(item["label"], item["label"])
                 self._combo(combo, selected)
@@ -1119,6 +1202,14 @@ class MainWindow(QMainWindow):
         content.addWidget(label(f"{NAME} {VERSION}   /   Core {update.VERSION}", "badge"), alignment=Qt.AlignmentFlag.AlignLeft)
         content.addWidget(button(self.t("打开更新说明", "Update instructions"), self.open_update_guide), alignment=Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(card)
+        layout.addWidget(label(self.t("游戏内面板快捷键", "In-game overlay key"), "subheading"))
+        self.overlay_combo = ComboBox()
+        for name, code in reshade_ini.OVERLAY_KEYS.items():
+            self.overlay_combo.addItem(self.t("按路线默认（Home / Insert）", "Route default (Home / Insert)") if not code else name, code)
+        self._combo(self.overlay_combo, prefs.get("overlay_key") or 0)
+        self.overlay_combo.activated.connect(lambda _: prefs.set_("overlay_key", self.overlay_combo.currentData()))
+        layout.addWidget(self.overlay_combo)
+        layout.addWidget(label(self.t("重新安装组件后生效。", "Takes effect after reinstalling components."), "muted"))
         layout.addWidget(label(self.t("维护", "MAINTENANCE"), "eyebrow"))
         layout.addWidget(button(self.t("重新安装所有游戏的组件", "Reinstall components for all games"), self.update_all), alignment=Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(label(self.t("窗口大小自动保存。Ctrl+F 搜索游戏。拖动游戏列表与设置之间的分隔线可调整空间。", "Window size is remembered. Ctrl+F focuses search. Drag the divider to adjust library and setup widths."), "muted", True))

@@ -14,7 +14,7 @@ def report_fields(engine_version, entry=None, inspection=None, route=""):
         fields["store"] = str(game.source)[:80]
         fields["configuration"] = f"API: {game.api}\nArchitecture: {game.bitness}\nRoute: {route}\nAnti-cheat: {entry.anticheat or 'Not detected / 未检测到'}"
     if inspection and inspection.gpu_name:
-        fields["hardware"] = str(inspection.gpu_name)[:120] + "\nDriver / 驱动版本："
+        fields["hardware"] = str(inspection.gpu_name)[:120] + "\nDriver / 驱动版本：" + str(getattr(inspection, "driver", "") or "Unknown / 不清楚")
     return fields
 
 

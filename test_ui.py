@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch, PropertyMock
 
 from PySide6.QtCore import Qt, QEvent
-from PySide6.QtGui import QMouseEvent
+from PySide6.QtGui import QMouseEvent, QFont
 from PySide6.QtWidgets import QApplication, QDialog
 from PySide6.QtTest import QTest
 
@@ -58,6 +58,7 @@ class DesktopTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
         cls.app.setStyle("Fusion")
+        cls.app.setFont(QFont("Microsoft YaHei UI", 10))
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -399,6 +400,50 @@ class DesktopTests(unittest.TestCase):
         self.window.current.game.bitness = 32
         self.window._route_changed()
         self.assertFalse(self.window._options().vr)
+
+    def test_ray_reconstruction_only_replaces_existing_supported_game(self):
+        self.select_game()
+        rr = self.window.version_combos["dlssd"]
+        rr.addItem("fixture RR", "fixture")
+        self.window._combo(rr, "fixture")
+        self.assertFalse(rr.isEnabled())
+        self.assertEqual(self.window._options().dlssd, "")
+        self.window.inspection.support.evidence.append("nvngx_dlssd.dll")
+        self.window._combo(self.window.route_combo, dlss.FEEDER)
+        self.assertTrue(rr.isEnabled())
+        self.assertEqual(self.window._options().dlssd, "fixture")
+        self.window._combo(self.window.route_combo, dlss.OPTI)
+        self.assertEqual(self.window._options().dlssd, "")
+
+    def test_driver_warning_visible_before_install(self):
+        self.select_game()
+        self.window.inspection.driver = "475.14"
+        self.window._route_changed()
+        self.assertIn("475.14", self.window.engine_warning.text())
+        self.assertFalse(self.window.engine_warning.isHidden())
+        self.window.inspection.driver = "616.56"
+        self.window._route_changed()
+        self.assertTrue(self.window.engine_warning.isHidden())
+
+    def test_session_cancel_does_not_apply_and_restores_button(self):
+        from frontend.session import SessionResult
+        self.select_game(0)
+        item = self.window.current
+        result = SessionResult("fixture", str(item.game.install_dir), dlss.OPTI, 75, 100)
+        with patch.object(self.service, "session_report", return_value=result, create=True), \
+             patch.object(self.service, "apply_tune", create=True) as apply, \
+             patch.object(QDialog, "exec", return_value=QDialog.DialogCode.Rejected):
+            self.window.analyse_session()
+            self.assertFalse(self.window.session_button.isEnabled())
+            self.drain()
+            apply.assert_not_called()
+        self.assertTrue(self.window.session_button.isEnabled())
+
+    def test_overlay_key_persists_without_installing(self):
+        self.window._combo(self.window.overlay_combo, 0x7A)
+        self.window.overlay_combo.activated.emit(self.window.overlay_combo.currentIndex())
+        self.assertEqual(prefs.get("overlay_key"), 0x7A)
+        self.assertFalse(self.service.installs)
 
     def test_openxr_cancel_does_not_install(self):
         from PySide6.QtWidgets import QMessageBox
