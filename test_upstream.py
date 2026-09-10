@@ -153,7 +153,7 @@ class UpstreamTests(unittest.TestCase):
         for path in ("../escape.dll", "..\\escape.dll", str(self.root / "outside.dll")):
             with self.subTest(path=path), self.assertRaises(net.OutsideError):
                 net.inside(self.folder, path)
-        self.assertEqual(net.inside(self.folder, "bin/runtime.dll"), self.folder / "bin/runtime.dll")
+        self.assertEqual(net.inside(self.folder, "bin/runtime.dll"), (self.folder / "bin/runtime.dll").resolve())
 
     def test_analysis_proposes_without_writing_game_config(self):
         from types import SimpleNamespace
