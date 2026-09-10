@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <strong>v0.2.5 · Player preview</strong> · install core: DLSS5-Autopilot <strong>v1.7.3</strong>
+  <strong>v0.2.6 · Player preview</strong> · install core: DLSS5-Autopilot <strong>v1.8.0</strong>
 </p>
 
 <p align="center">
@@ -24,10 +24,10 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.2.5-blue" alt="version 0.2.5">
+  <img src="https://img.shields.io/badge/version-0.2.6-blue" alt="version 0.2.6">
   <img src="https://img.shields.io/badge/status-player%20preview-orange" alt="player preview">
   <img src="https://img.shields.io/badge/platform-Windows%20x64-lightgrey" alt="Windows x64">
-  <img src="https://img.shields.io/badge/engine-Autopilot%20v1.7.3-informational" alt="Autopilot v1.7.3">
+  <img src="https://img.shields.io/badge/engine-Autopilot%20v1.8.0-informational" alt="Autopilot v1.8.0">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
 </p>
 
@@ -35,14 +35,14 @@
 
 ## Download
 
-Download the Windows x64 package from [Releases](https://github.com/ha7rock/JustDLSS5/releases): `JustDLSS5-v0.2.5-windows-x64.zip`.
+Download the Windows x64 package from [Releases](https://github.com/ha7rock/JustDLSS5/releases): `JustDLSS5-v0.2.6-windows-x64.zip`.
 
 1. Extract the full archive to a writable folder.
 2. Run `JustDLSS5.exe`. Keep `_internal` and the license files next to it; do not copy only the EXE.
 3. The portable build does not require a separate Python install.
 4. To verify integrity, use `SHA256SUMS.txt`. PowerShell example: `Get-FileHash <file> -Algorithm SHA256`.
 
-The same release also includes `BUILD-INFO.json` (build metadata) and `JustDLSS5-v0.2.5-source-materials.zip` (application and matching dependency sources).
+The same release also includes `BUILD-INFO.json` (build metadata) and `JustDLSS5-v0.2.6-source-materials.zip` (application and matching dependency sources).
 
 Testing guide: [docs/TESTING-PREVIEW.zh-CN.md](docs/TESTING-PREVIEW.zh-CN.md). Feedback: [open an issue](https://github.com/ha7rock/JustDLSS5/issues/new?template=bug-report.yml), or use **Report a problem** in the app.
 
@@ -69,7 +69,7 @@ Configuring DLSS 5–related components by hand often means locating packages, m
 | UI | None | Upstream tooling | Independent Qt (PySide) desktop app |
 | Languages | — | Upstream | Simplified Chinese / English |
 | Game library | Manual | Upstream flow | Scan local games, add folders, view install status |
-| Install core | Manual | Upstream | Currently Autopilot **v1.7.3** (`core/`) |
+| Install core | Manual | Upstream | Currently Autopilot **v1.8.0** (`core/`) |
 | Maintenance | Manual | Upstream | Preview, diagnose, uninstall, restore backups |
 | Distribution | — | Upstream | Preview ZIP, checksums, licenses and source materials |
 
@@ -111,7 +111,7 @@ Configuring DLSS 5–related components by hand often means locating packages, m
 | | DLSS5-Autopilot | JustDLSS5 |
 |---|---|---|
 | Role | Upstream install engine / tooling | Desktop UI on that logic |
-| Version | Upstream releases | Currently **v1.7.3** (`backend-version.json`) |
+| Version | Upstream releases | Currently **v1.8.0** (`backend-version.json`) |
 | UI | Upstream | Independent Qt app, Chinese and English |
 | Package | Upstream project | Portable ZIP, SHA-256, build info, licenses and sources |
 | License | Upstream | MIT for JustDLSS5 code; upstream copyright retained |
@@ -153,7 +153,7 @@ python autopilot_desktop.py
 build-desktop.bat
 ```
 
-Output: `dist/v0.2.5/JustDLSS5/JustDLSS5.exe`. Keep `_internal` next to the executable.
+Output: `dist/v0.2.6/JustDLSS5/JustDLSS5.exe`. Keep `_internal` next to the executable.
 
 Maintainer notes: [docs/MAINTAINING.zh-CN.md](docs/MAINTAINING.zh-CN.md).
 
@@ -175,11 +175,11 @@ Maintainer notes: [docs/MAINTAINING.zh-CN.md](docs/MAINTAINING.zh-CN.md).
 ## Docs
 
 - [docs/TESTING-PREVIEW.zh-CN.md](docs/TESTING-PREVIEW.zh-CN.md)
-- [docs/RELEASE-v0.2.5.md](docs/RELEASE-v0.2.5.md)
+- [docs/RELEASE-v0.2.6.md](docs/RELEASE-v0.2.6.md)
 - [docs/THIRD-PARTY-NOTICES.md](docs/THIRD-PARTY-NOTICES.md)
 - [docs/MAINTAINING.zh-CN.md](docs/MAINTAINING.zh-CN.md)
 - [docs/UPSTREAM-AND-SOURCES.zh-CN.md](docs/UPSTREAM-AND-SOURCES.zh-CN.md) · [docs/UPSTREAM_README.md](docs/UPSTREAM_README.md)
 
 ---
 
-<p align="center">JustDLSS5 · v0.2.5 player preview · MIT · community tool, not affiliated with NVIDIA</p>
+<p align="center">JustDLSS5 · v0.2.6 player preview · MIT · community tool, not affiliated with NVIDIA</p>
