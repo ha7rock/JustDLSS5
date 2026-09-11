@@ -220,5 +220,85 @@ class UpstreamTests(unittest.TestCase):
         self.assertIn("117,0,0,0", text)
 
 
+    def test_bridge_keeps_configuration_across_runtime_versions(self):
+        file = feedcfg.write_bridge(self.folder, feedcfg.bridge_defaults(False))
+        self.assertEqual(file.read_text().splitlines()[0], "# dlss5-bridge keep")
+        self.assertEqual(feedcfg.read(file)["synth_after"], "3")
+        feedcfg.write_bridge(self.folder, feedcfg.bridge_defaults(True))
+        self.assertEqual(feedcfg.read(file)["synth_after"], "0")
+
+    def test_opti_logging_and_fork_update_notice(self):
+        file = self.folder / "OptiScaler.ini"
+        file.write_text("[Log]\nLogToFile=auto\nLogLevel=5\n[Custom]\nKeep=1\n")
+        optiscaler.enable_nr(self.folder, settings={"WorkingScale": .75})
+        text = file.read_text()
+        self.assertEqual(optiscaler._ini_get(text, "Log", "LogToFile"), "true")
+        self.assertEqual(optiscaler._ini_get(text, "Log", "LogLevel"), "5")
+        self.assertEqual(optiscaler._ini_get(text, "Hotfix", "CheckForUpdate"), "false")
+        self.assertIn("Keep=1", text)
+
+    def test_cached_duplicate_retains_manual_api_entry(self):
+        from dataclasses import replace
+        from core import log
+        other = self.root / "other"
+        other.mkdir()
+        preferred = replace(self.game, folder=other, source="Manual")
+        library.save([self.game, preferred], {}, self.service._cache_version(), 86)
+        with patch.object(games, "api_override", side_effect=lambda folder: "DX12" if folder == other else ""), \
+             patch.object(log, "write"):
+            entries = self.service.load_library(lambda *args: None)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0].game.folder, other)
+        self.assertEqual(entries[0].game.api, "DX12")
+
+    def test_full_executable_wins_over_same_game_trial(self):
+        trial = self.folder / "gameTrial.exe"
+        trial.write_bytes(b"fixture")
+        with patch.object(pe, "_walk_exes", return_value=[trial, self.exe]), \
+             patch.object(pe, "_score", return_value=1000):
+            self.assertEqual(pe.find_game_exes(self.folder)[0], self.exe)
+            self.assertIn(trial, pe.find_game_exes(self.folder))
+
+    def test_invalid_cached_archive_is_replaced(self):
+        import io
+        contents = io.BytesIO()
+        with zipfile.ZipFile(contents, "w") as archive:
+            archive.writestr("fixture.txt", "fixture")
+        response = io.BytesIO(contents.getvalue())
+        response.status = 200
+        response.headers = {"Content-Length": str(len(contents.getvalue()))}
+        cached = self.root / "download.zip"
+        cached.write_bytes(b"<html>proxy error</html>")
+        with patch.object(net, "CACHE", self.root), \
+             patch("urllib.request.urlopen", return_value=response) as request:
+            result = net.download("https://example.invalid/file.zip", cached.name)
+        request.assert_called_once()
+        self.assertTrue(zipfile.is_zipfile(result))
+
+    def test_crash_library_does_not_choose_graphics_api(self):
+        dll = self.folder / "GFSDK_Aftermath_Lib.x64.dll"
+        dll.write_bytes(b"fixture")
+        with patch.object(pe, "_engine_default", return_value=None), \
+             patch.object(pe, "_names_in", return_value=set()), \
+             patch.object(pe, "_ours_in", return_value=set()), \
+             patch.object(pe, "pe_imports", return_value=["d3d12.dll"]) as imports:
+            pe._runtime_graphics(self.exe)
+        self.assertNotIn(dll, [call.args[0] for call in imports.call_args_list])
+
+    def test_mfg_wrong_archive_shape_is_rejected_before_writes(self):
+        from core import mfg
+        archive = self.root / "changed.zip"
+        with zipfile.ZipFile(archive, "w") as output:
+            output.writestr("unexpected.txt", "fixture")
+        before = set(self.folder.iterdir())
+        with patch.object(mfg, "loader_name", return_value="version.dll"), \
+             patch.object(mfg, "resolve", return_value=("fixture", "https://example.invalid/mfg.zip")), \
+             patch.object(mfg, "resolve_loader", return_value=("fixture", "https://example.invalid/loader.zip")), \
+             patch.object(net, "download", return_value=archive):
+            with self.assertRaises(mfg.ShapeChanged):
+                mfg.install(self.folder, self.exe)
+        self.assertEqual(set(self.folder.iterdir()), before)
+
+
 if __name__ == "__main__":
     unittest.main()

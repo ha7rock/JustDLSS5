@@ -439,6 +439,31 @@ class DesktopTests(unittest.TestCase):
             apply.assert_not_called()
         self.assertTrue(self.window.session_button.isEnabled())
 
+    def test_standalone_advice_only_when_offered(self):
+        self.select_game()
+        w = self.window
+        w.inspection.driver = "616.92"
+        w._combo(w.route_combo, dlss.FEEDER)
+        self.assertNotIn("Standalone", w.engine_warning.text())
+        w.inspection.support.options.append(dlss.STANDALONE)
+        w._route_changed()
+        self.assertIn("Standalone", w.engine_warning.text())
+        w.inspection.fit[dlss.STANDALONE] = (True, "fixture")
+        w.route_combo.addItem("Standalone", dlss.STANDALONE)
+        w._combo(w.route_combo, dlss.STANDALONE)
+        self.assertIn("RenoDX", w.engine_warning.text())
+        self.assertNotIn("存在崩溃风险", w.engine_warning.text())
+
+    def test_opti_upscaler_requirement_is_visible(self):
+        self.select_game()
+        w = self.window
+        w.inspection.support.native_dlss = False
+        w.inspection.support.upscaler = "fsr"
+        w._route_changed()
+        self.assertIn("FSR", w.engine_warning.text())
+        self.assertIn("Feeder", w.engine_warning.text())
+        self.assertFalse(w.engine_warning.isHidden())
+
     def test_overlay_key_persists_without_installing(self):
         self.window._combo(self.window.overlay_combo, 0x7A)
         self.window.overlay_combo.activated.emit(self.window.overlay_combo.currentIndex())

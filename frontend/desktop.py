@@ -871,14 +871,22 @@ class MainWindow(QMainWindow):
         rr.setEnabled(route not in (dlss.OPTI, dlss.REMIX) and any(
             str(item).lower().endswith("nvngx_dlssd.dll") for item in self.inspection.support.evidence))
         warnings = []
-        driver_warning = dlss.driver_warning(route, self.inspection.driver)
+        offered = self.inspection.support.options
+        driver_warning = dlss.driver_warning(route, self.inspection.driver, offered=offered)
         if driver_warning:
             if gpu.driver_at_least("616.56", self.inspection.driver) is False:
                 warnings.append(self.t(f"驱动 {self.inspection.driver} 不支持神经渲染，请先更新驱动。", f"Driver {self.inspection.driver} predates neural rendering; update the driver first."))
+            elif route == dlss.STANDALONE:
+                warnings.append(self.t("Standalone 不加载发生已知故障的 RenoDX 插件，可作为替代尝试；仍为实验性路线。", "Standalone bypasses the RenoDX add-on implicated in these faults; it remains experimental."))
+            elif route in (dlss.NATIVE, dlss.BRIDGE, dlss.FEEDER, dlss.RENODX) and dlss.STANDALONE in offered:
+                warnings.append(self.t(f"驱动 {self.inspection.driver} 下此路线可能崩溃，可先尝试 Standalone。悬停查看说明。", f"This route may crash on driver {self.inspection.driver}; consider Standalone. Hover for details."))
             else:
                 warnings.append(self.t(f"上游报告驱动 {self.inspection.driver} 存在崩溃风险。悬停查看说明。", f"Upstream reports crashes on driver {self.inspection.driver}. Hover for details."))
         if not self.inspection.gpu_name and self.inspection.vendor:
             warnings.append(self.t("当前显卡不支持本工具的神经渲染安装：", "Neural rendering installation is unavailable on: ") + self.inspection.vendor)
+        if route == dlss.OPTI and not self.inspection.support.native_dlss and self.inspection.support.upscaler:
+            kind = "FSR" if self.inspection.support.upscaler == "fsr" else "XeSS"
+            warnings.append(self.t(f"需要在游戏设置中开启 {kind}。没有此选项时，请改用 Feeder。", f"Enable {kind} in the game's settings. If unavailable, use Feeder instead."))
         tag = self.feeder_combo.currentData() or ""
         if self.inspection.hdr and route == dlss.FEEDER and tag not in ("", "__pre__") and sources.feeder_key(tag) < sources.feeder_key(sources.FEEDER_HDR_MIN):
             warnings.append(self.t("此 Feeder 版本可能破坏 HDR 高光，请使用最新版本。", "This feeder build may damage HDR highlights; select the latest version."))
