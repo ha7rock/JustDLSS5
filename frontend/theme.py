@@ -58,6 +58,10 @@ QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 QSplitter::handle { background: transparent; }
 QSplitter::handle:hover { background: #4b5940; }
 QPlainTextEdit { background: #14171b; border: 1px solid #303640; border-radius: 8px; padding: 12px; font-family: 'Cascadia Mono', 'Consolas'; font-size: 12px; }
+QTabWidget::pane { border: none; }
+QTabBar::tab { background: #191c21; color: #929aa6; padding: 10px 18px; border-bottom: 2px solid transparent; }
+QTabBar::tab:selected { color: #c7eca1; border-bottom-color: #b6e477; }
+QTabBar::tab:hover { background: #242930; }
 QProgressBar { background: #292f37; border: none; border-radius: 2px; height: 4px; }
 QProgressBar::chunk { background: #b6e477; border-radius: 2px; }
 QSlider::groove:horizontal { background: #363e47; height: 4px; border-radius: 2px; }

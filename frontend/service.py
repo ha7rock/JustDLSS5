@@ -161,7 +161,7 @@ class BackendService:
 
     def diagnose(self, entry):
         from .session import analyse
-        return analyse(entry).text
+        return analyse(entry)
 
     def session_report(self, entry, target):
         from .session import analyse
@@ -181,8 +181,7 @@ class BackendService:
             "暂无足够的社区记录（至少 5 份）；这不代表兼容。 / Insufficient reports (minimum 5); compatibility is unknown."])
 
     def versions(self, entry):
-        return "\n".join(f"{item.name}\n  {item.installed or '—'} → {item.latest or '—'}"
-                         for item in components.check(entry.game.install_dir))
+        return components.check(entry.game.install_dir)
 
     def catalog(self):
         return sources.rhi_catalog(), sources.feeder_releases()

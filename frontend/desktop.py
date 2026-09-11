@@ -20,6 +20,7 @@ from .theme import STYLES
 from .controls import Button, ComboBox, Slider
 from .about import NAME, VERSION, REPOSITORY
 from . import feedback, updates
+from .diagnostic_view import DiagnosticDialog
 
 
 def column(parent=None, margins=0, spacing=12):
@@ -930,17 +931,7 @@ class MainWindow(QMainWindow):
         target = int(raw)
         def done(result):
             self._append_log(result.text)
-            dialog = QDialog(self)
-            dialog.setWindowTitle(self.t("运行诊断", "Session diagnosis"))
-            dialog.resize(680, 500)
-            layout = column(dialog, 20, 12)
-            text = QPlainTextEdit(result.text)
-            text.setReadOnly(True)
-            layout.addWidget(text)
-            if result.resolution:
-                apply_button = button(self.t(f"应用建议：{result.resolution}%（下次启动生效）", f"Apply {result.resolution}% (next launch)"), dialog.accept)
-                layout.addWidget(apply_button)
-            layout.addWidget(button(self.t("关闭", "Close"), dialog.reject))
+            dialog = DiagnosticDialog(result, entry.game.name, self.chinese, self)
             if dialog.exec() == QDialog.DialogCode.Accepted and result.resolution:
                 self._submit(lambda emit: self.service.apply_tune(entry, result),
                              lambda value: self.show_text(self.t("设置已保存", "Setting saved"), self.t(
@@ -951,7 +942,8 @@ class MainWindow(QMainWindow):
 
     def community_report(self):
         route = self.route_combo.currentData()
-        self._report(lambda entry: self.service.community_report(entry, route))
+        self._report(lambda entry: self.service.community_report(entry, route),
+                     self.t("社区兼容报告（上游汇总）", "Community reports (upstream aggregate)"))
 
     def _quality_changed(self, *args):
         name = self.quality_combo.currentData()
@@ -1043,9 +1035,9 @@ class MainWindow(QMainWindow):
         if not self.current or not self.inspection or self.busy_job:
             return
         menu = QMenu(self)
-        for title, callback in ((self.t("诊断安装问题", "Diagnose"), lambda: self._report(self.service.diagnose)),
+        for title, callback in ((self.t("检查安装与运行", "Check installation and session"), self.diagnose_selected),
                                 (self.t("社区兼容报告", "Community reports"), self.community_report),
-                                (self.t("检查组件版本", "Component versions"), lambda: self._report(self.service.versions)),
+                                (self.t("检查组件版本", "Component versions"), self.component_versions),
                                 (self.t("截图效果对比", "Screenshot comparison"), self.show_comparison),
                                 (self.t("打开游戏文件夹", "Open game folder"), lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.current.game.folder))))):
             menu.addAction(title, callback)
@@ -1054,10 +1046,52 @@ class MainWindow(QMainWindow):
         action.setEnabled(self.current.installed)
         menu.exec(self.more_button.mapToGlobal(self.more_button.rect().bottomLeft()))
 
-    def _report(self, function):
+    def diagnose_selected(self):
+        entry = self.current
+        if not entry or self.busy_job:
+            return
+        def done(result):
+            self._append_log(result.text)
+            DiagnosticDialog(result, entry.game.name, self.chinese, self).exec()
+        self._submit(lambda emit: self.service.diagnose(entry), done,
+                     busy=True, title=self.t("正在检查安装与运行…", "Checking installation and session…"))
+
+    def component_versions(self):
+        entry = self.current
+        if not entry or self.busy_job:
+            return
+        def done(items):
+            dialog = QDialog(self)
+            dialog.setWindowTitle(self.t("组件版本", "Component versions"))
+            dialog.resize(680, 460)
+            layout = column(dialog, 20)
+            layout.addWidget(label(entry.game.name, "subheading", True))
+            layout.addWidget(label(self.t("仅检查版本，不会安装或替换文件。", "This check does not install or replace files."), "muted", True))
+            from PySide6.QtWidgets import QTableWidget, QTableWidgetItem
+            table = QTableWidget(len(items), 3)
+            table.setHorizontalHeaderLabels([self.t("组件", "Component"), self.t("已安装", "Installed"), self.t("最新可用", "Latest available")])
+            table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+            table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+            table.verticalHeader().hide()
+            table.horizontalHeader().setMinimumSectionSize(50)
+            table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+            for index, item in enumerate(items):
+                for col, value in enumerate((item.name, item.installed or self.t("未检测到", "Not detected"), item.latest or self.t("未知", "Unknown"))):
+                    cell = QTableWidgetItem(value)
+                    cell.setToolTip(value)
+                    table.setItem(index, col, cell)
+            layout.addWidget(table)
+            if not items:
+                layout.addWidget(label(self.t("未检测到可检查的组件。", "No components available to check."), "muted", True))
+            layout.addWidget(button(self.t("关闭", "Close"), dialog.accept))
+            dialog.exec()
+        self._submit(lambda emit: self.service.versions(entry), done, busy=True,
+                     title=self.t("正在检查组件版本…", "Checking component versions…"))
+
+    def _report(self, function, title=None):
         entry = self.current
         if entry:
-            self._submit(lambda emit: function(entry), lambda text: self.show_text(self.t("检查结果", "Results"), text),
+            self._submit(lambda emit: function(entry), lambda text: self.show_text(title or self.t("检查结果", "Results"), text),
                          busy=True, title=self.t("正在检查…", "Checking…"))
 
     def show_text(self, title, text):

@@ -1,5 +1,5 @@
 """Session diagnostics and explicit tuning actions, executed by desktop workers."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from .backend import autotune, diagnose, dlss, feedcfg, installer, optiscaler, wincrash
@@ -12,6 +12,12 @@ class SessionResult:
     route: str
     resolution: int = 0
     measured: int = 0
+    verdict: str = ""
+    findings: list = field(default_factory=list)
+    log_time: str = ""
+    crash: object = None
+    related_crash: bool = False
+    target: int = 0
 
 
 def work_applies(game, route):
@@ -55,7 +61,9 @@ def analyse(entry, target=0):
         if description:
             prefix = "" if related else "较早的崩溃记录 / Earlier crash record:\n"
             lines.append(prefix + "\n".join(description))
-    result = SessionResult("", str(folder), route)
+    result = SessionResult("", str(folder), route, verdict=verdict,
+                           findings=list(report.findings), log_time=getattr(report, "log_time", ""),
+                           crash=crash, related_crash=related, target=target)
     if target and report.ran and not related and work_applies(game, route):
         resolution = autotune.ran_at(folder, route, 100)
         feed = diagnose._last_run(diagnose._tail(folder / diagnose.FEED_LOG, 100_000))

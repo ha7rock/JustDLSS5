@@ -12,6 +12,32 @@ from frontend.service import BackendService, LibraryEntry
 
 
 class UpstreamTests(unittest.TestCase):
+    def test_diagnostic_catalog_covers_pinned_static_titles_and_verdicts(self):
+        import ast
+        from frontend.diagnostic_text import translate
+        tree = ast.parse(Path(diagnose.__file__).read_text(encoding="utf8"))
+        messages = set()
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "add" and len(node.args) > 1
+                    and isinstance(node.args[1], ast.Constant)):
+                messages.add(node.args[1].value)
+            if (isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
+                    and any(isinstance(target, ast.Attribute) and target.attr == "verdict" for target in node.targets)):
+                messages.add(node.value.value)
+        self.assertGreater(len(messages), 100)
+        self.assertEqual([message for message in sorted(messages) if translate(message) is None], [])
+
+    def test_diagnostic_translation_preserves_values_and_unknown_messages(self):
+        from frontend.diagnostic_text import translate
+        path = r"C:\游戏\info check\nvngx_dlssnr.dll"
+        text = f"Add-on missing from the folder: {path}."
+        self.assertIn(path, translate(text))
+        self.assertEqual(translate(text, False), text)
+        self.assertIn("0xBAD", translate("The neural feature was refused by NGX (0xBAD)."))
+        self.assertIsNone(translate("New upstream warning: " + text))
+        self.assertIsNone(translate(path))
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

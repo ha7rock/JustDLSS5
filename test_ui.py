@@ -54,6 +54,56 @@ class FakeService:
 
 
 class DesktopTests(unittest.TestCase):
+    def test_diagnostic_groups_localization_copy_and_narrow_layout(self):
+        from core.diagnose import Finding
+        from frontend.session import SessionResult
+        from frontend.diagnostic_view import DiagnosticDialog
+        from PySide6.QtWidgets import QLabel, QPushButton
+        raw = "[bad] original <b>text</b>\n" + "path/" * 160
+        result = SessionResult(raw, "fixture", dlss.OPTI, verdict="Working.", findings=[
+            Finding("ok", "NGX initialised successfully."),
+            Finding("warn", "ReShade is not giving the feed a depth buffer.", "original detail"),
+            Finding("new-level", "Unknown <b>message</b> " + "x" * 300),
+        ])
+        for chinese in (True, False):
+            dialog = DiagnosticDialog(result, "Game " + "x" * 200, chinese, self.window)
+            try:
+                dialog.resize(500, 460)
+                dialog.show()
+                self.app.processEvents()
+                self.assertFalse(dialog.groups["issues"].isHidden())
+                self.assertFalse(dialog.groups["notes"].isHidden())
+                self.assertTrue(dialog.groups["passed"].isHidden())
+                self.assertEqual(dialog.raw.toPlainText(), raw)
+                self.assertEqual(dialog.scroll.horizontalScrollBar().maximum(), 0)
+                labels = dialog.findChildren(QLabel)
+                self.assertTrue(any("Unknown <b>message</b>" in x.text() for x in labels))
+                self.assertTrue(all(x.textFormat() == Qt.TextFormat.PlainText for x in labels))
+                if chinese:
+                    self.assertTrue(any("神经渲染已运行" in x.text() for x in labels))
+                copy = next(b for b in dialog.findChildren(QPushButton) if b.text() in ("复制原始记录", "Copy original report"))
+                copy.click()
+                self.assertEqual(self.app.clipboard().text(), raw)
+                self.assertIn(copy.text(), ("已复制", "Copied"))
+                expand = next(b for b in dialog.findChildren(QPushButton) if b.text().startswith(("已通过 (", "Passed checks (")))
+                expand.click()
+                self.assertFalse(dialog.groups["passed"].isHidden())
+            finally:
+                dialog.close()
+
+    def test_installation_check_uses_structured_dialog_and_restores_busy_state(self):
+        from frontend.session import SessionResult
+        self.select_game()
+        result = SessionResult("original", "fixture", dlss.OPTI, verdict="Working.")
+        with patch.object(self.service, "diagnose", return_value=result, create=True), \
+             patch("frontend.desktop.DiagnosticDialog") as dialog:
+            self.window.diagnose_selected()
+            self.assertTrue(self.window.busy_job)
+            self.drain()
+            dialog.assert_called_once_with(result, self.window.current.game.name, True, self.window)
+            dialog.return_value.exec.assert_called_once()
+        self.assertFalse(self.window.busy_job)
+
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
