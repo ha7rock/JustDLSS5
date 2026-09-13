@@ -273,6 +273,16 @@ class MainWindow(QMainWindow):
                                              for text in scan_labels) + 64)
         header.addWidget(self.add_button)
         header.addWidget(self.scan_button)
+        self.scan_options = QToolButton()
+        self.scan_options.setText("▾")
+        self.scan_options.setToolTip(self.t("扫描选项", "Scan options"))
+        self.scan_options.setAccessibleName(self.scan_options.toolTip())
+        self.scan_options.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        scan_menu = QMenu(self.scan_options)
+        self.full_scan_action = scan_menu.addAction(self.t("完整扫描（含模拟器）", "Full scan (including emulators)"))
+        self.full_scan_action.triggered.connect(lambda: self.scan(full=True))
+        self.scan_options.setMenu(scan_menu)
+        header.addWidget(self.scan_options)
         self.scan_feedback = label("", "muted", True)
         self.scan_feedback.setAccessibleName(self.t("游戏扫描状态", "Game scan status"))
         self.scan_feedback.hide()
@@ -443,6 +453,12 @@ class MainWindow(QMainWindow):
             self.api_combo.addItem(api, api)
         self.api_combo.activated.connect(self._api_changed)
         form.addRow(self.t("图形接口", "Graphics API"), self.api_combo)
+        self.arch_combo = ComboBox()
+        self.arch_combo.addItem(self.t("自动检测", "Automatic"), None)
+        self.arch_combo.addItem("64-bit", 64)
+        self.arch_combo.addItem("32-bit", 32)
+        self.arch_combo.activated.connect(self._architecture_changed)
+        form.addRow(self.t("程序架构", "Architecture"), self.arch_combo)
         self.fg_check = QCheckBox(self.t("FSR 补帧 · 2x", "FSR frame generation · 2x"))
         self.fg_check.setToolTip(self.t("OptiScaler / DX12。请关闭游戏内补帧；可能增加延迟。", "OptiScaler / DX12. Disable in-game frame generation; may add latency."))
         form.addRow(self.fg_check)
@@ -652,6 +668,7 @@ class MainWindow(QMainWindow):
 
     def _set_busy(self, busy):
         self.scan_button.setEnabled(not busy)
+        self.scan_options.setEnabled(not busy)
         self.empty_scan_button.setEnabled(not busy)
         self.add_button.setEnabled(not busy)
         self.language.setEnabled(not self.jobs.active)
@@ -669,7 +686,7 @@ class MainWindow(QMainWindow):
             self.scan_feedback.setText(self.t("已读取上次游戏库，可重新扫描。", "Previous library loaded. Rescan to find new games."))
             self.scan_feedback.show()
 
-    def scan(self):
+    def scan(self, full=False):
         if self.busy_job is not None:
             return
         self.scan_feedback.setText(self.t("正在扫描本地游戏，完成后会更新列表。", "Scanning local games. The library will update when finished."))
@@ -677,7 +694,8 @@ class MainWindow(QMainWindow):
         for control in (self.scan_button, self.empty_scan_button):
             control.setText(self.t("扫描中…", "Scanning…"))
             control.setToolTip(self.t("正在扫描，请稍候。", "Scan in progress. Please wait."))
-        self.scan_job = self._submit(self.service.scan, self._scan_finished, busy=True,
+        operation = (lambda emit: self.service.scan(emit, full=True)) if full else self.service.scan
+        self.scan_job = self._submit(operation, self._scan_finished, busy=True,
             title=self.t("正在扫描本地游戏…", "Scanning local libraries…"),
             controls=(self.scan_button, self.empty_scan_button))
 
@@ -771,6 +789,8 @@ class MainWindow(QMainWindow):
         self.exe_combo.blockSignals(False)
         self._apply_options(inspection.options)
         self._combo(self.api_combo, inspection.api_override)
+        self._combo(self.arch_combo, inspection.bitness_override)
+        self.arch_combo.setEnabled(bool(getattr(inspection.entry.game, "exe_warning", "")))
         self.preview_button.setEnabled(True)
         self.more_button.setEnabled(True)
         self.gpu_label.setText(inspection.gpu_name or self.t("未检测到 NVIDIA 显卡", "No NVIDIA GPU detected"))
@@ -839,7 +859,8 @@ class MainWindow(QMainWindow):
                           "" if key == "dlssd" else combo.currentData() for key, combo in self.version_combos.items()})
 
     def _route_usable(self):
-        return bool(self.inspection and self.inspection.support.supported and
+        return bool(self.inspection and installer.check_supported(self.inspection.entry.game)[0] and
+                    self.inspection.support.supported and
                     self.inspection.fit.get(self.route_combo.currentData(), (False, ""))[0])
 
     def _route_changed(self, *args):
@@ -872,11 +893,17 @@ class MainWindow(QMainWindow):
         rr.setEnabled(route not in (dlss.OPTI, dlss.REMIX) and any(
             str(item).lower().endswith("nvngx_dlssd.dll") for item in self.inspection.support.evidence))
         warnings = []
+        if getattr(self.current.game, "exe_warning", ""):
+            warnings.append(self.t("Windows 限制读取此程序。请在高级设置中选择 32/64 位并确认图形接口。", "Windows protects this executable. Choose 32/64-bit and confirm the graphics API in advanced settings."))
+        if getattr(self.inspection.support, "steered_from", ""):
+            warnings.append(self.t("根据当前驱动，推荐 Standalone；此游戏没有原生 DLSS。已有安装保留原路线。", "Your driver favors Standalone for this game without native DLSS. Existing installs keep their route."))
         offered = self.inspection.support.options
         driver_warning = dlss.driver_warning(route, self.inspection.driver, offered=offered)
         if driver_warning:
             if gpu.driver_at_least("616.56", self.inspection.driver) is False:
                 warnings.append(self.t(f"驱动 {self.inspection.driver} 不支持神经渲染，请先更新驱动。", f"Driver {self.inspection.driver} predates neural rendering; update the driver first."))
+            elif route == dlss.RENODX:
+                warnings.append(self.t("此路线使用 ShortFuse 插件，当前驱动下的兼容性尚不明确。", "This route uses the ShortFuse add-on; compatibility with this driver is uncertain."))
             elif route == dlss.STANDALONE:
                 warnings.append(self.t("Standalone 不加载发生已知故障的 RenoDX 插件，可作为替代尝试；仍为实验性路线。", "Standalone bypasses the RenoDX add-on implicated in these faults; it remains experimental."))
             elif route in (dlss.NATIVE, dlss.BRIDGE, dlss.FEEDER, dlss.RENODX) and dlss.STANDALONE in offered:
@@ -963,6 +990,13 @@ class MainWindow(QMainWindow):
         entry = self.current
         self._submit(lambda emit: self.service.select_executable(entry, path), self._added, busy=True,
                      title=self.t("重新识别目标程序…", "Inspecting executable…"))
+
+    def _architecture_changed(self, index):
+        if not self.current or self.busy_job:
+            return
+        entry, bitness = self.current, self.arch_combo.currentData()
+        self._submit(lambda emit: self.service.set_architecture(entry, bitness), self._added,
+                     busy=True, title=self.t("正在重新检测…", "Updating detection…"))
 
     def _api_changed(self, index):
         if not self.current or self.busy_job:

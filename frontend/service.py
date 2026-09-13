@@ -33,12 +33,14 @@ class Inspection:
     driver: str = ""
     hdr: bool = False
     vendor: str = ""
+    bitness_override: int | None = None
 
 
 class BackendService:
     def __init__(self):
         self._gpu = None
         self._entries = []
+        self._scan_ready = False
 
     @staticmethod
     def _cache_version():
@@ -52,6 +54,7 @@ class BackendService:
         if cached is None:
             return []
         found, _, changed = cached
+        self._scan_ready = True
         for game in changed:
             games.enrich(game, chosen=bool(game.exe and game.exe.is_file()))
         self._entries = [self.decorate(game) for game in found if self.has_game_files(game)]
@@ -67,8 +70,12 @@ class BackendService:
             self._gpu = gpu.detect()
         return self._gpu
 
-    def scan(self, emit):
-        found = games.scan_all(progress=lambda text: emit("log", text))
+    def scan(self, emit, full=False):
+        progress = lambda text: emit("log", text)
+        if full or not self._scan_ready:
+            found = games.scan_all(progress=progress)
+        else:
+            found, _ = games.quick_scan([entry.game for entry in self._entries], progress=progress)
         known = video.known()
         if known and not any(g.folder == known.folder for g in found):
             found.append(known)
@@ -79,6 +86,7 @@ class BackendService:
             else:
                 emit("log", f"跳过残留目录（无游戏程序） / Skipped folder without a game executable: {game.folder}")
         self._entries = entries
+        self._scan_ready = True
         self._save_library()
         return entries
 
@@ -123,7 +131,8 @@ class BackendService:
     def inspect(self, entry):
         game = entry.game
         name, sm = self.hardware()
-        support = dlss.detect(game.install_dir, game.folder, game.api, game.bitness or 0, sm)
+        driver = gpu.driver_version() or ""
+        support = dlss.detect(game.install_dir, game.folder, game.api, game.bitness or 0, sm, driver=driver)
         fit = {route: dlss.fit(route, game.api, support.native_dlss, sm,
                               upscaler=support.upscaler) for route in support.options}
         options = installer.options_from_manifest(game.install_dir) if entry.installed else None
@@ -138,8 +147,15 @@ class BackendService:
         return Inspection(entry, support, fit, options, name or "", level, explanation, levels,
                           games.api_override(game.folder),
                           mfg.applies(sm, game.api, game.install_dir, game.folder)[0],
-                          gpu.driver_version() or "", gpu.hdr_on() is True,
-                          (gpu.other_vendor() or "") if not name else "")
+                          driver, gpu.hdr_on() is True,
+                          (gpu.other_vendor() or "") if not name else "",
+                          games.bitness_override(game.folder))
+
+    def set_architecture(self, entry, bitness):
+        if bitness is not None and (type(bitness) is not int or bitness not in (32, 64)):
+            raise ValueError("Invalid architecture")
+        games.set_bitness_override(entry.game.folder, bitness)
+        return self.select_executable(entry, entry.game.exe)
 
     def set_graphics_api(self, entry, api):
         if api and api not in games.APIS:

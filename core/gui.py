@@ -24,7 +24,7 @@ from tkinter import filedialog, messagebox, ttk
 from . import (anticheat, autotune, community, components, diagnose, dlss,
                dxvk, feedcfg, reengine, wincrash,
                games, gpu, library, pe, profiles, video,
-               installer, log, optiscaler, prefs, reshade_ini, selfupdate,
+               installer, log, net, optiscaler, prefs, reshade_ini, selfupdate,
                sources, update)
 from . import mfg as _mfg
 
@@ -55,6 +55,31 @@ ADDON_AUTO = "auto - the newest build that works on this driver and route"
 # The first entry of the ray-reconstruction dropdown: doing nothing is
 # the right default, because the game already works with what it ships.
 DLSSD_KEEP = "keep the game's own"
+
+
+def _api_name(api: str) -> str:
+    """How a graphics API is written in a dropdown: one name everywhere."""
+    return {"DX9": "DirectX 9", "DX10": "DirectX 10", "DX11": "DirectX 11",
+            "DX12": "DirectX 12"}.get(api, api)
+
+
+def _fault_in_this_folder(crash, install_dir) -> bool:
+    """Could this fault have come from the install being looked at?
+
+    The event is found by the executable's name, so a second copy of the same
+    game answers for the first. When the record names a path - Application
+    Error's module field usually does - it has to be this folder's. When it
+    names a bare module ("dxgi.dll"), there is nothing to compare and the
+    answer is yes.
+    """
+    mod = str(getattr(crash, "module", "") or "").replace("/", "\\")
+    if not ("\\" in mod or ":" in mod):
+        return True
+    try:
+        here = str(Path(install_dir).resolve()).replace("/", "\\").lower()
+    except (OSError, ValueError, TypeError):
+        return True
+    return here.rstrip("\\") in mod.lower()
 
 
 def _crash_is_this_session_impl(crash, install_dir) -> bool:
@@ -257,6 +282,133 @@ def _wrap_to_width(lbl: tk.Label, floor: int = 200) -> None:
     lbl.bind("<Configure>", fit, add="+")
 
 
+def _flow_row(bar: tk.Frame, lead: tk.Widget, buttons: list, gap: int,
+              lead_min: int = 0) -> None:
+    """A title on the left and buttons on the right, on as many lines as it takes.
+
+    One line when it fits - how the games page has always looked. When it
+    does not, the title keeps the first line and the buttons fill lines of
+    their own under it, right-aligned. Packed side by side, five buttons ran
+    off the window from 200% up, and four had from 250% (#144).
+
+    `lead_min` is for a lead that stretches (the search box): it takes what
+    the buttons leave, but never less than this. The search box used to be
+    squeezed to nothing at 250%.
+    """
+    lines: list[tk.Frame] = []
+    state = {"key": None}
+
+    def lay(_e=None) -> None:
+        width = bar.winfo_width()
+        if width <= 1:
+            return
+        sizes = [b.winfo_reqwidth() + gap for b in buttons]
+        # The lead's line takes what fits beside it, in order; the rest
+        # fill lines of their own. Everything on one line is the usual case.
+        room = width - max(lead.winfo_reqwidth(), lead_min)
+        plan, cur, used = [], [], 0
+        for i, s in enumerate(sizes):
+            cap = room if not plan else width
+            if used + s > cap and (cur or not plan):
+                plan.append(cur)
+                cur, used = [], 0
+            cur.append(i)
+            used += s
+        plan.append(cur)
+        key = tuple(tuple(p) for p in plan)
+        if key == state["key"]:
+            return
+        state["key"] = key
+        for w in [lead] + buttons:
+            w.grid_forget()
+        for ln in lines:
+            ln.destroy()
+        lines.clear()
+        bar.grid_columnconfigure(0, weight=1)
+        lead.grid(row=0, column=0, sticky="ew" if lead_min else "w")
+        plan_lines = []
+        for r, idx in enumerate(plan):
+            if not idx:
+                continue
+            ln = tk.Frame(bar, bg=bar.cget("bg"))
+            if r == 0:
+                ln.grid(row=0, column=1, sticky="e")
+            else:
+                ln.grid(row=r, column=0, columnspan=2, sticky="e",
+                        pady=(gap // 2, 0))
+            lines.append(ln)
+            plan_lines.append((ln, idx))
+        for ln, idx in plan_lines:
+            ln.lift()
+            for c, i in enumerate(idx):
+                buttons[i].grid(in_=ln, row=0, column=c,
+                                padx=(0 if c == 0 else gap, 0))
+                buttons[i].lift()
+
+    bar.bind("<Configure>", lay, add="+")
+
+
+def _button_bar(bar: tk.Frame, lead: tk.Widget, buttons: list, gap: int,
+                keep: tuple) -> None:
+    """A title and a row of buttons that always stays one line.
+
+    What does not fit goes into a "more" menu at the end, least important
+    first (`keep` lists button indexes, most important first). Wrapping them
+    onto lines of their own, the first try for #144, pushed the game list off
+    the page at 350%: this is the row above the list, and every line it
+    takes is a line the list loses.
+    """
+    more = ttk.Menubutton(bar, text="more")
+    menu = tk.Menu(more, tearoff=0, bg=PANEL, fg=TXT, activebackground=FIELD,
+                   activeforeground=AMBER, disabledforeground=FAINT,
+                   font=font(9), borderwidth=0)
+    more["menu"] = menu
+    hidden: list[int] = []
+
+    def fill_menu() -> None:
+        menu.delete(0, "end")
+        for i in hidden:
+            b = buttons[i]
+            menu.add_command(label=str(b.cget("text")), command=b.invoke,
+                             state="disabled" if b.instate(["disabled"]) else "normal")
+
+    menu.configure(postcommand=fill_menu)
+    state = {"key": None}
+
+    def lay(_e=None) -> None:
+        width = bar.winfo_width()
+        if width <= 1:
+            return
+        room = width - lead.winfo_reqwidth()
+        sizes = [b.winfo_reqwidth() + gap for b in buttons]
+        shown = list(range(len(buttons)))
+        if sum(sizes) > room:
+            room -= more.winfo_reqwidth() + gap
+            shown, used = [], 0
+            for i in keep:
+                if used + sizes[i] <= room:
+                    shown.append(i)
+                    used += sizes[i]
+            shown.sort()
+        key = tuple(shown)
+        if key == state["key"]:
+            return
+        state["key"] = key
+        hidden[:] = [i for i in range(len(buttons)) if i not in shown]
+        for w in [lead, more] + buttons:
+            w.grid_forget()
+        bar.grid_columnconfigure(0, weight=1)
+        lead.grid(row=0, column=0, sticky="w")
+        col = 1
+        for i in shown:
+            buttons[i].grid(row=0, column=col, padx=(gap, 0))
+            col += 1
+        if hidden:
+            more.grid(row=0, column=col, padx=(gap, 0))
+
+    bar.bind("<Configure>", lay, add="+")
+
+
 class Prose(tk.Text):
     """Read-only text that is as tall as what it says, with styled lines.
 
@@ -329,8 +481,12 @@ PAGES = {1: ("start", "find your games"),
          4: ("video and youtube", "any file or a youtube link"),
          5: ("rtx remix", "path-traced classics")}
 NAV = (2, 3, None, 4, 5)           # None: a rule between the two groups
-ARCH_CHOICES = (("all", "every architecture"), ("64", "64-bit only"),
-                ("32", "32-bit only (experimental)"))
+# Short on purpose: the dropdown is as wide as its longest entry, and at
+# 400% "32-bit only (experimental)" pushed the filters onto a line of their
+# own and took a row off the game list. The list's outlook column already
+# says how far each 32-bit game can be trusted.
+ARCH_CHOICES = (("all", "32 + 64-bit"), ("64", "64-bit only"),
+                ("32", "32-bit only"))
 
 
 class App:
@@ -370,6 +526,7 @@ class App:
         self.fg = tk.BooleanVar(value=False)
         self.mfg = tk.BooleanVar(value=False)
         self.vr = tk.BooleanVar(value=False)
+        self.remix_swap = tk.BooleanVar(value=False)
         self.sm: int | None = None          # the card's architecture, once known
         self.stale: dict[str, int] = {}     # install folder -> outdated parts
         self.route_fit: dict[str, tuple[bool, str]] = {}
@@ -708,9 +865,7 @@ class App:
         self._jump(2 if self._have_library() else 1)
 
     def _can_install_page(self) -> bool:
-        """A game is picked, and one the tool can set up: 'continue' is off
-        for an Xbox game without mods enabled, and the rail must not be the
-        way round it."""
+        """A game is picked and has the metadata needed to install."""
         if not self.game:
             return False
         try:
@@ -850,13 +1005,34 @@ class App:
         self.bannerlbl.config(text=f"> version {latest} downloaded and verified")
         self.updbtn.config(text="[ restart into it ]")
 
+    def _restart_into(self, new_exe) -> None:
+        """Hand over to the swap script; a refusal is said on the banner.
+
+        Through the generic handlers it read as an internal error, offered
+        a crash report, and left the banner saying "restarting".
+        """
+        try:
+            selfupdate.apply_and_restart(new_exe)
+        except (selfupdate.UpdateError, OSError) as e:
+            log.write(f"update not applied: {e}", "warn")
+            self.busy = False
+            self.update_ready = None
+            self.bannerlbl.config(text=f"> update failed: {e}")
+            self.pblbl.config(text="")
+            if not self._crash_shown:
+                self.updbtn.config(text="[ update now ]")
+
     def _do_update(self) -> None:
         if self.busy:
             return
+        if self.update_ready is not None and not Path(self.update_ready).is_file():
+            # The staged download was cleared (a day old, another copy of
+            # the tool pruned it): fetch it again below.
+            self.update_ready = None
         if self.update_ready is not None:
             self.bannerlbl.config(text="> restarting into the new build...")
             self.root.update()
-            selfupdate.apply_and_restart(self.update_ready)
+            self._restart_into(self.update_ready)
             return
         if selfupdate.running_exe() is None:
             webbrowser.open(self.update_url or update.RELEASES_PAGE)
@@ -1034,36 +1210,43 @@ class App:
         # and this page is the first thing the tool opens on now.
         top = tk.Frame(f, bg=BG)
         top.pack(fill="x")
-        ttk.Label(top, text="pick a game", style="H1.TLabel").pack(side="left")
-        ttk.Button(top, text="choose folder", command=self._pick_folder)\
-            .pack(side="right", padx=(8, 0))
-        ttk.Button(top, text="rescan", command=self._scan).pack(side="right")
+        title = ttk.Label(top, text="pick a game", style="H1.TLabel")
         # Removing an install should not mean walking the whole wizard again.
         self.btn_rm2 = ttk.Button(top, text="uninstall", state="disabled",
                                   command=self._uninstall)
-        self.btn_rm2.pack(side="right", padx=(0, 8))
-        ttk.Button(top, text="update all", command=self._update_all)\
-            .pack(side="right", padx=(0, 8))
+        # "rescan" reads what the stores list and inspects only games it
+        # has not seen; "full rescan" walks every drive again (#144).
+        # Left to right as drawn; `keep` is the order they give way in when
+        # the line is short - the last ones go into "more" first.
+        _button_bar(top, title, [
+            ttk.Button(top, text="update all", command=self._update_all),
+            self.btn_rm2,
+            ttk.Button(top, text="rescan", command=self._scan),
+            ttk.Button(top, text="full rescan",
+                       command=lambda: self._scan(full=True)),
+            ttk.Button(top, text="choose folder", command=self._pick_folder),
+        ], gap=px(8), keep=(2, 4, 1, 0, 3))
 
         # A library of two hundred games with no way to search reads as "the
         # list is broken" - the only filter here used to be 32/64-bit.
         srow = tk.Frame(f, bg=BG)
         srow.pack(fill="x", pady=(10, 0))
-        ttk.Label(srow, text="search", style="Dim.TLabel").pack(side="left")
+        sfind = tk.Frame(srow, bg=BG)
+        ttk.Label(sfind, text="search", style="Dim.TLabel").pack(side="left")
         # Some libraries are huge, and some people only ever want to point
         # at one folder (issue #18): the automatic scan can be switched off.
         self.scan_on_start = tk.BooleanVar(value=bool(prefs.get("scan_on_start", True)))
-        tk.Checkbutton(srow, text="scan library at start", variable=self.scan_on_start,
-                       command=lambda: prefs.set_("scan_on_start", bool(self.scan_on_start.get())),
-                       bg=BG, fg=DIM, selectcolor=FIELD, activebackground=BG,
-                       activeforeground=TXT, font=font(8), borderwidth=0)\
-            .pack(side="right", padx=(0, 2))
+        ck_start = tk.Checkbutton(
+            srow, text="scan library at start", variable=self.scan_on_start,
+            command=lambda: prefs.set_("scan_on_start", bool(self.scan_on_start.get())),
+            bg=BG, fg=DIM, selectcolor=FIELD, activebackground=BG,
+            activeforeground=TXT, font=font(8), borderwidth=0)
         self.only_installed = tk.BooleanVar(value=False)
-        tk.Checkbutton(srow, text="installed only", variable=self.only_installed,
-                       command=self._fill, bg=BG, fg=BODY, selectcolor=FIELD,
-                       activebackground=BG, activeforeground=TXT,
-                       font=font(9), borderwidth=0)\
-            .pack(side="right", padx=(0, 16))
+        ck_inst = tk.Checkbutton(
+            srow, text="installed only", variable=self.only_installed,
+            command=self._fill, bg=BG, fg=BODY, selectcolor=FIELD,
+            activebackground=BG, activeforeground=TXT,
+            font=font(9), borderwidth=0)
         # The 32/64-bit filter was a page of its own in front of the list;
         # a filter belongs beside the other filters.
         self.archbox = ttk.Combobox(srow, state="readonly", font=font(9),
@@ -1079,12 +1262,15 @@ class App:
         # ...and the other way, when something else sets the filter.
         self.arch.trace_add("write", lambda *_a: self.archbox.set(
             dict(ARCH_CHOICES).get(self.arch.get(), ARCH_CHOICES[0][1])))
-        self.archbox.pack(side="right", padx=(0, 16))
-        ent = tk.Entry(srow, textvariable=self.search, bg=FIELD, fg=TXT,
+        # width=8: its natural twenty characters would decide the line on
+        # their own; it stretches to whatever the filters leave anyway.
+        ent = tk.Entry(sfind, textvariable=self.search, bg=FIELD, fg=TXT, width=8,
                        insertbackground=AMBER, relief="flat", font=font(10),
                        highlightthickness=1, highlightbackground=LINE,
                        highlightcolor=EDGE)
         ent.pack(side="left", fill="x", expand=True, padx=(10, 0), ipady=3)
+        _flow_row(srow, sfind, [self.archbox, ck_inst, ck_start], gap=px(16),
+                  lead_min=px(180))
         # "break": Esc here clears the box and stops there, instead of
         # also taking the window home.
         ent.bind("<Escape>", lambda e: (self.search.set(""), "break")[1])
@@ -1130,6 +1316,30 @@ class App:
                                bg=PANEL, fg=FAINT, font=font(9),
                                anchor="w", justify="left")
         self.detail.pack(fill="x")
+        # A protected Xbox executable (#157): what the exe would have told
+        # us is asked instead. One control per row - two side by side ran
+        # off the card at 200% and above.
+        self.protected_details = tk.Frame(det.inner, bg=PANEL)
+        hint = tk.Label(self.protected_details, text=games.XBOX_EXE_HINT,
+                        bg=PANEL, fg=RUST, font=font(9), anchor="w",
+                        justify="left", wraplength=px(600))
+        hint.pack(fill="x", pady=(6, 0))
+        self.protected_details.bind("<Configure>", lambda e: hint.configure(
+            wraplength=max(px(160), e.width - px(10))), add="+")
+        choices = tk.Frame(self.protected_details, bg=PANEL)
+        choices.pack(anchor="w", pady=(6, 0))
+        # Label above its dropdown, not beside it: side by side the api row
+        # still ran past the card at 350%.
+        ttk.Label(choices, text="architecture").grid(row=0, column=0, sticky="w")
+        self.cb_bitness = ttk.Combobox(choices, state="readonly", width=12,
+                                       values=["not set", "64-bit", "32-bit"])
+        self.cb_bitness.grid(row=1, column=0, sticky="w")
+        self.cb_bitness.bind("<<ComboboxSelected>>", self._on_bitness)
+        ttk.Label(choices, text="graphics api").grid(row=2, column=0, sticky="w",
+                                                     pady=(6, 0))
+        self.cb_protected_api = ttk.Combobox(choices, state="readonly", width=28)
+        self.cb_protected_api.grid(row=3, column=0, sticky="w")
+        self.cb_protected_api.bind("<<ComboboxSelected>>", self._on_api)
         return f
 
     def _pick_folder(self) -> None:
@@ -1584,7 +1794,7 @@ class App:
         whose folder or executable moved on are read again - their renderer
         may be what changed - and that costs a folder walk each, so it
         happens on a worker thread while the list is already usable.
-        "rescan" always does the full walk (issue #67).
+        "rescan" reads what is new and "full rescan" walks everything (#67, #144).
         """
         try:
             got = library.load(update.VERSION, self._sm())
@@ -1643,7 +1853,12 @@ class App:
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _scan(self) -> None:
+    def _scan(self, full: bool = False) -> None:
+        """Read the library. "rescan" reads only what is new; `full` walks all.
+
+        The quick one needs a saved library from this version: without one
+        there is nothing to compare against, and it is the full walk anyway.
+        """
         if self.busy:
             return
         self.busy = True
@@ -1654,6 +1869,33 @@ class App:
         self.tree.delete(*self.tree.get_children())
         self.scanlbl.config(text="scanning...")
         self.btn_next.config(state="disabled")
+
+        def quick(cached) -> None:
+            try:
+                known, rows, changed = cached
+                gs, fresh = games.quick_scan(
+                    known, progress=lambda m: self.q.put(("scan", m)))
+                sm = self._sm()
+                for g in changed:
+                    # The folder moved on since it was read: read it again,
+                    # exactly as opening the app does (_recheck_changed).
+                    try:
+                        games.enrich(g)
+                    except Exception:
+                        log.exception(f"re-reading {g.name}")
+                keep = {(str(g.folder), str(g.exe)) for g in gs if g.exe}
+                rows = {k: r for k, r in rows.items() if k in keep}
+                for g in fresh + [c for c in changed if c in gs]:
+                    if g.exe:
+                        self.q.put(("scan", f"Checking compatibility: {g.name}"))
+                        rows[(str(g.folder), str(g.exe))] = self._inspect_row(g, sm)
+                log.write(f"quick rescan: {len(fresh)} new, {len(changed)} changed, "
+                          f"{len(gs)} in all")
+                library.save(gs, rows, update.VERSION, sm)
+                self.q.put(("scanned", (gs, rows)))
+            except Exception:
+                log.exception("rescanning the library")
+                self.q.put(("error", traceback.format_exc()))
 
         def work() -> None:
             try:
@@ -1678,7 +1920,20 @@ class App:
             except Exception:
                 log.exception("scanning the library")
                 self.q.put(("error", traceback.format_exc()))
-        threading.Thread(target=work, daemon=True).start()
+        def start() -> None:
+            # Reading the saved library touches every game's folder, and one
+            # of them can be on a slow USB disk (#144): not on the Tk thread.
+            cached = None
+            if not full:
+                try:
+                    cached = library.load(update.VERSION, self._sm())
+                except Exception:
+                    log.exception("reading the library cache")
+            if cached:
+                quick(cached)
+            else:
+                work()
+        threading.Thread(target=start, daemon=True).start()
 
     def _load_board(self) -> None:
         """Current upstream versions, one line, from the cached API answers."""
@@ -1779,10 +2034,10 @@ class App:
         try:
             ok, _ = installer.check_supported(g)
             if not ok:
-                # A locked Xbox executable already has a useful error; a
-                # second search cannot make it readable.
+                # Missing metadata or a fatal scan error: show its reason.
                 return False, "-", installer.EXPERIMENTAL, "-", False, ""
-            sup = dlss.detect(g.install_dir, g.folder, g.api, g.bitness or 0, sm)
+            sup = dlss.detect(g.install_dir, g.folder, g.api, g.bitness or 0, sm,
+                              driver=gpu.driver_version())
             level, _ = installer.reliability(g, sup.recommended)
             outlook = {installer.STABLE: "reliable",
                        installer.BETA: "beta",
@@ -1841,7 +2096,8 @@ class App:
                 continue
             ok, route, level, outlook, ac_present, ac_summary = row
             if not ok:
-                status, tag, outlook = "unsupported", "unsupported", "-"
+                status = "choose architecture / api" if g.exe_warning and not g.error else "unsupported"
+                tag, outlook = "unsupported", "-"
             elif ac_present:
                 # Not refused - it is their machine - but said up front, and
                 # asked again before INSTALL.
@@ -1891,8 +2147,8 @@ class App:
                 msg = (f'nothing matches "{q}"  ::  clear the search box for '
                        f'all {listed} games')
             elif self.all_games and a != "all":
-                msg = (f"no {a}-bit games  ::  set the filter to 'every "
-                       f"architecture', or use [choose folder]")
+                msg = (f"no {a}-bit games  ::  set the filter to "
+                       f"'{ARCH_CHOICES[0][1]}', or use [choose folder]")
             elif self.all_games and only and only.get():
                 msg = "nothing installed yet  ::  untick 'installed only'"
             elif self.all_games:
@@ -1904,6 +2160,7 @@ class App:
                        "store returned")
         self.scanlbl.config(text=msg)
         self.game = None
+        self.protected_details.pack_forget()
         self.detail.config(text="select a game for details", fg=FAINT)
         self.btn_next.config(state="disabled")
         self._paint_rail()
@@ -1915,16 +2172,53 @@ class App:
         g = self.shown[int(sel[0])]
         if g is not self.game:
             self._forget_last_session()
+        if g is not self.game:
+            # An experimental choice that replaces a mod's runtime is made
+            # per game, never carried from the last one picked - but a game
+            # whose runtime this tool swapped in keeps it ticked, or an
+            # install from this page would drop the swap from the record
+            # and "update all" would stop renewing it.
+            try:
+                prev = installer._previous_manifest(g.install_dir) or {}
+                swapped = bool((prev.get("components") or {}).get("remix_runtime"))
+            except Exception:
+                swapped = False
+            self.remix_swap.set(swapped)
         self.game = g
         self._paint_rail()
         ok, why = installer.check_supported(g)
-        sup = dlss.detect(g.install_dir, g.folder, g.api, g.bitness or 0, self._sm())
+        self.protected_details.pack_forget()
+        if g.exe_warning:
+            self.cb_bitness.current({64: 1, 32: 2}.get(g.bitness, 0))
+            guess = g.api_detected
+            self.cb_protected_api["values"] = [
+                f"auto  -  {_api_name(guess)}, guessed" if guess in games.APIS
+                else "auto  -  not known, pick one"] + \
+                [_api_name(a) for a in games.APIS]
+            forced = games.api_override(g.folder)
+            self.cb_protected_api.current(games.APIS.index(forced) + 1 if forced in games.APIS else 0)
+            self.protected_details.pack(fill="x")
+        _drv_now = gpu.driver_version()
+        sup = dlss.detect(g.install_dir, g.folder, g.api, g.bitness or 0, self._sm(),
+                          driver=_drv_now)
         level, why_rel = installer.reliability(g, sup.recommended)
         proxy = installer._proxy_name(g.api, self._opts().reshade_proxy)
         lines = [f"exe    {g.exe}",
                  f"arch   {g.bit_label}  api {g.api}  ({g.api_why})",
                  f"route  {dlss.LABELS[sup.recommended]}  [{level}]"
                  + ("  -  ships its own dlss" if sup.native_dlss else "")]
+        # Why the recommended route is the experimental one: without this the
+        # page says "standalone-dlssnr [experimental]" on every 64-bit D3D11/12
+        # game of a 616.64+ machine and nothing on the page says the driver did
+        # that. The install page carries the full reason.
+        if getattr(sup, "steered_from", ""):
+            _drv = _drv_now or "?"
+            lines.append(f"driver {_drv}: "
+                         f"{dlss.LABELS[sup.steered_from].split(' - ')[0]} "
+                         f"reaches nvidia's runtime through the add-on that "
+                         f"faults on this driver - the install page has the "
+                         f"whole reason, and 616.56 is the newest driver with "
+                         f"no report of it")
         n_stale = self.stale.get(str(g.install_dir), 0)
         if n_stale:
             lines.append(f"update {n_stale} installed part(s) have a newer version "
@@ -2033,6 +2327,8 @@ class App:
                    [f"{n}  -  {installer.RESHADE_PROXY_HELP[n]}"
                     for n in installer.RESHADE_PROXIES])
         self.cb_rproxy.current(0)
+        self.cb_rproxy.bind("<<ComboboxSelected>>",
+                            lambda e: self._set_pathlbl(self.game))
 
         row(4, "dlss5 add-on")
         self.cb_renodx = ttk.Combobox(inner, state="readonly", values=["loading..."])
@@ -2193,9 +2489,12 @@ class App:
             inner, bg=PANEL, fg=DIM, font=font(8), anchor="w", justify="left",
             text="stable = what GitHub marks as the latest release; or pin an "
                  "exact build when the newest one breaks a game. builds "
-                 "before 0.8 pair with DLSS 5 add-on 4.55 and have a settings "
-                 "tab; 0.10 and later use add-on 4.7 and take preset and work "
-                 "area from here")
+                 "before 0.8.0-beta.3 pair with renodx-dlss5 4.55 and have "
+                 "a settings tab; from there on the preset is taken from "
+                 "here, the work area too on the 64-bit d3d11 path, and the "
+                 "newest add-on is installed unless "
+                 "the driver or an OpenGL game pins an older one - the "
+                 "install log says which")
         _wrap_to_width(self.feederhint)
 
         # Some D3D11 games quit the moment ReShade hooks them (MGS V). Through
@@ -2235,6 +2534,21 @@ class App:
             activebackground=PANEL, activeforeground=TXT, font=font(8),
             borderwidth=0)
 
+        # The Remix route, when the mod's runtime has no neural pass. Every
+        # message about it said "tick 'swap the Remix runtime'" and only the
+        # command line had it (#148).
+        self.ck_remixswap = tk.Checkbutton(
+            inner, text="swap the Remix runtime: only needed when this mod's "
+                        "runtime has no DLSS 5 pass (the install says so). puts "
+                        "in a community build that has one. experimental - it "
+                        "can undo fixes the mod's own runtime carried; the old "
+                        "one is backed up and comes back on uninstall",
+            variable=self.remix_swap, bg=PANEL, fg=DIM, selectcolor=FIELD,
+            activebackground=PANEL, activeforeground=TXT, font=font(8),
+            borderwidth=0, justify="left", anchor="w",
+            command=lambda: self._set_pathlbl(self.game))
+        _wrap_to_width(self.ck_remixswap)
+
         self.reswarn = tk.Label(
             inner, bg=PANEL, fg=RUST, font=font(8), justify="left", anchor="w",
             wraplength=px(680),
@@ -2245,7 +2559,7 @@ class App:
         # Row 19: a paragraph, not a control, and it belongs under the
         # settings rather than between two of them. It shared row 13 with
         # the DXVK checkbox, which painted over it on every DX11 feeder
-        # game - found by the walkthrough's grid-overlap check.
+        # game.
         self.reswarn.grid(row=19, column=0, columnspan=3, sticky="ew", pady=(12, 0))
 
         inner.bind("<Configure>",
@@ -2562,6 +2876,24 @@ class App:
         g = self.game
         return g is None or _crash_is_this_session_impl(crash, g.install_dir)
 
+    def _reprint_verdict(self, rep) -> None:
+        """Say the new verdict on screen, where the old one is still standing.
+
+        The fault record arrives after the diagnosis has been printed, so
+        rewriting rep.verdict alone changed the bug report and the shared
+        record and left the person reading the opposite. Nothing re-runs the
+        printing, so the corrected verdict is printed again here, with the
+        finding that carries the evidence.
+        """
+        self._log("")
+        self._log(f"> {rep.verdict}",
+                  "ok" if str(rep.verdict).startswith("Working") else "err")
+        for f_ in getattr(rep, "findings", [])[-1:]:
+            if f_.level == diagnose.BAD and "faulting" in f_.title:
+                self._log(f"[fail] {f_.title}", "err")
+                if f_.detail:
+                    self._log(f"        {f_.detail}")
+
     def _crash_overrides(self, crash) -> None:
         """A recorded fault outranks a log that stopped in a good place.
 
@@ -2570,20 +2902,132 @@ class App:
         well. Windows' own record is, and when the two disagree the record
         wins - saying "Working." to somebody who watched the game close is
         the fastest way to lose their trust (#98).
+
+        It outranks the opposite verdict for the same reason. "Not started
+        since the install" rests on there being no log; a fault record for
+        the game's own executable, written after the install, says it did
+        start - and a game that dies before ReShade loads writes nothing,
+        which is exactly this shape (#171, GTA V: the report carried the
+        fault and still said "run the game once").
         """
         d = getattr(self, "_last_diag", None)
-        if d is None or not str(getattr(d, "verdict", "")).startswith("Working"):
+        if d is None:
+            return
+        working = str(getattr(d, "verdict", "")).startswith("Working")
+        never_ran = bool(getattr(d, "never_ran", False))
+        if not working and not never_ran:
             return
         if not self._crash_is_this_session(crash):
             return
         mod = str(getattr(crash, "module", "") or "")
+        if never_ran:
+            # With no log there is no mtime to date the fault against, so
+            # _crash_is_this_session above cannot filter anything here - and
+            # the event is matched on the executable's NAME. Two copies of the
+            # same game (the #171 fault was in "...\\Grand Theft Auto V
+            # Legacy\\GTA5.exe", which need not be the folder being looked at)
+            # would otherwise rewrite this verdict from the wrong install.
+            g = self.game
+            where = getattr(g, "install_dir", None) if g is not None else None
+            if where is not None and not _fault_in_this_folder(crash, where):
+                return
+            # never_ran is set on seven shapes and two of them have a log
+            # (older than the install: ReShade's at diagnose.py:981 and the
+            # standalone add-on's at :2440). The third one used to be the
+            # add-on's log missing while ReShade's was not - that shape
+            # stopped setting never_ran when :2428 became `not reshade_ran`.
+            # "before anything could write a line" is only true of the rest,
+            # so the verdict says what IS true of all seven: nothing here
+            # recorded this session.
+            d.verdict = ("It started, and nothing here recorded the session - "
+                         "Windows recorded the fault"
+                         + (f" in {mod}." if mod else "."))
+            d.never_ran = False
+            # The findings under it were written on the strength of the absent
+            # log and now contradict the verdict - and they go into the report
+            # and the shared record verbatim.
+            # Matched on fragments, not on whole sentences: one of these
+            # prunes was written against a title that had been renamed in
+            # the same commit and silently stopped removing anything. And
+            # matched against the DETAIL as well as the title - three of the
+            # never_ran branches put "the game has not been run since
+            # installing" / "play once and check again" in the detail, so a
+            # title-only prune left the contradiction on the screen.
+            _gone = ("has not been started since the install",
+                     "own files changed after",
+                     "is older than the install",
+                     "predates this install",
+                     "has not been run since installing",
+                     "play once and check again")
+            d.findings = [f for f in d.findings
+                          # "If you DID start it" and "The likeliest reason:
+                          # another executable" both read badly under proof
+                          # that this executable faulted.
+                          if not f.title.startswith("If you DID start it")
+                          and not f.title.startswith("The likeliest reason:")
+                          and not any(s in f"{f.title} {f.detail}"
+                                      for s in _gone)]
+            d.add(diagnose.BAD,
+                  f"Windows recorded {getattr(crash, 'exe', 'the game')} "
+                  f"faulting" + (f" in {mod}." if mod else "."),
+                  "So it was started. Nothing here wrote a line that "
+                  "describes this session - a fault on record, and no "
+                  "session of our own in the logs.")
+            # After the finding exists: the reprint carries it.
+            self._reprint_verdict(d)
+            # The dropdown is named differently per route: OptiScaler
+            # calls it 'loads as'. The feeder has both - row 3 carries its
+            # motion-vector provider and the ReShade name has a row of its
+            # own. Remix installs no ReShade, so there is nothing to name.
+            # Naming a control that is not on the screen is #148's shape.
+            route = str(getattr(d, "route", ""))
+            drop = ("'loads as'" if route == "optiscaler"
+                    else "" if route == "remix"
+                    else "'reshade loads as'")
+            after = (f"and if it faults the same way, try another name in the "
+                     f"{drop} dropdown on the install page." if drop else
+                     "and if it faults the same way, say so in an issue with "
+                     "this report - a game that dies before anything loads is "
+                     "worth a look.")
+            self._log("> so it WAS started: nothing here recorded the "
+                      "session, and Windows recorded the game faulting - "
+                      "which is what a game that dies before the add-ons "
+                      "load looks like. "
+                      "Uninstall, check the game starts on its own, then "
+                      f"install again - {after}", "warn")
+            return
         d.verdict = ("It ran, and then the game crashed - Windows recorded "
                      "the fault" + (f" in {mod}." if mod else "."))
+        self._reprint_verdict(d)
         self._log("")
         self._log("> the neural pass did run, so the install is right - but "
                   "Windows recorded this game faulting afterwards, and a "
                   "session that ends in a crash is not a working one.",
                   "warn")
+        # And then the next step, which this stopped at until #98: "your
+        # install is right, the game crashes" is a diagnosis nobody can act
+        # on. The one test that splits it in two is switching the neural
+        # pass off and starting the game again - Dragon's Dogma 2 survived
+        # that and crashed with it on, which named the pass rather than the
+        # tool. A game that dies at startup cannot reach an overlay, so the
+        # file is the control that gets named here.
+        route = str(getattr(d, "route", ""))
+        if route == "optiscaler":
+            self._log("> the test that splits it in two: open OptiScaler.ini "
+                      "beside the game, set Enabled=false under [DlssNr], and "
+                      "start it again. Survives = the neural pass is what "
+                      "crashes it (Dragon's Dogma 2, #98) - set it back to "
+                      "true and try another 'optiscaler build', or switch the "
+                      "route to feeder. Still crashes = the fault is "
+                      "OptiScaler's or the game's own, and neural rendering "
+                      "was never the reason.", "warn")
+        else:
+            self._log("> the test that splits it in two: uninstall (the "
+                      "game's own files go back) and play the same spot "
+                      "again. Still crashes = the game or another mod, and "
+                      "this was never it. Survives = it is what we installed "
+                      "- say so in an issue with this report, and the module "
+                      "Windows named above says whose it is.", "warn")
 
     def _windows_crash(self, rep) -> None:
         """What Windows itself recorded when the game closed.
@@ -2987,6 +3431,8 @@ class App:
         self.route = path
         usable, note = self.route_fit.get(path, (True, ""))
         parts: list[tuple[str, str]] = []
+        if self.game and self.game.exe_warning:
+            parts.append(("warn", games.XBOX_EXE_CHOSEN))
         if not usable:
             parts.append(("bad", f"NOT FOR THIS PC - {note}."))
         parts.append(("blurb", dlss.BLURB[path]))
@@ -3057,10 +3503,26 @@ class App:
             pair = (self.lbl_proxy, self.cb_proxy)
         elif feeder:
             pair = (self.lbl_mv, self.cb_prov)
+        elif path == dlss.REMIX:
+            # Remix installs no ReShade at all: install() sets the proxy to
+            # "" and preview returns before any proxy is written, so the
+            # dropdown here would change nothing. It was on the page only
+            # because this was the else branch.
+            pair = None
         else:
             pair = (self.lbl_rproxy, self.cb_rproxy)
-        pair[0].grid(row=3, column=0, sticky="w", padx=(0, 14), pady=5)
-        pair[1].grid(row=3, column=1, columnspan=2, sticky="ew", pady=5)
+        if pair is not None:
+            pair[0].grid(row=3, column=0, sticky="w", padx=(0, 14), pady=5)
+            pair[1].grid(row=3, column=1, columnspan=2, sticky="ew", pady=5)
+        # The feeder route needs BOTH: row 3 is its motion-vector provider,
+        # and the name ReShade goes in under gets a row of its own. Without
+        # it the commonest answer to a no-log report - "this game skips
+        # dxgi.dll, try d3d11.dll" - names a control that is not on the page.
+        if feeder:
+            self.lbl_rproxy.grid(row=21, column=0, sticky="w",
+                                 padx=(0, 14), pady=5)
+            self.cb_rproxy.grid(row=21, column=1, columnspan=2,
+                                sticky="ew", pady=5)
         # Motion vectors, work area and DLSS preset belong to the feeder's
         # synthetic contract; the other routes hook the game's real DLSS calls
         # and ignore all three.
@@ -3134,6 +3596,16 @@ class App:
         else:
             self.ck_vr.grid_remove()
             self.vr.set(False)
+        # Shown on the whole route rather than only when the runtime lacks
+        # the pass: telling which it is means reading a 150-230 MB DLL, and
+        # that is not done on the Tk thread on a route change. Ticked on a
+        # runtime that has the pass, remix_state() ignores it.
+        if self.game and path == dlss.REMIX:
+            self.ck_remixswap.grid(row=20, column=0, columnspan=3, sticky="ew",
+                                   pady=(6, 0))
+        else:
+            self.ck_remixswap.grid_remove()
+            self.remix_swap.set(False)
         self._sync_workres()
         if self.game:
             level, why = installer.reliability(self.game, path)
@@ -3343,10 +3815,10 @@ class App:
         g = self.game
         if not g or not hasattr(self, "cb_api"):
             return
-        i = self.cb_api.current()
+        cb = _e.widget if _e is not None else self.cb_api
+        i = cb.current()
         chosen = "" if i <= 0 else games.APIS[i - 1]
         games.set_api_override(g.folder, chosen or None)
-        self.root.after(1, self._remember_library)
         detected = getattr(g, "api_detected", "") or g.api
         if chosen:
             g.api, g.api_why = chosen, f"set by hand (detected {detected})"
@@ -3359,16 +3831,38 @@ class App:
             except Exception:
                 g.api, g.api_why = detected, "detected from the executable"
         self._log(f"> graphics api: {g.api}" + ("" if chosen else " (auto)"))
+        if cb is self.cb_protected_api:
+            self._refresh_metadata()
+            return
+        self.root.after(1, self._remember_library)
+        self._forget_row(g)
         self._enter_install()
+
+    def _on_bitness(self, _e=None) -> None:
+        if not self.game or not self.game.exe_warning:
+            return
+        chosen = {1: 64, 2: 32}.get(self.cb_bitness.current())
+        games.set_bitness_override(self.game.folder, chosen)
+        self.game.bitness = chosen
+        self._refresh_metadata()
+
+    def _refresh_metadata(self) -> None:
+        g = self.game
+        self._forget_row(g)
+        self._fill()
+        if g in self.shown:
+            self.tree.selection_set(str(self.shown.index(g)))
+            self._on_pick()
+        self._remember_library()
 
     def _enter_install(self) -> None:
         g = self.game
         self.gamelbl.config(text=g.name)
         if getattr(g, "kind", "") != "video":
             detected = getattr(g, "api_detected", "") or g.api
-            self.cb_api["values"] = [f"auto  -  {detected} from the executable"] + \
-                [{"DX9": "DirectX 9", "DX10": "DirectX 10", "DX11": "DirectX 11",
-                  "DX12": "DirectX 12"}.get(a, a) for a in games.APIS]
+            origin = "the files beside it" if g.exe_warning else "the executable"
+            self.cb_api["values"] = [f"auto  -  {_api_name(detected)} from {origin}"] + \
+                [_api_name(a) for a in games.APIS]
             forced = games.api_override(g.folder)
             self.cb_api.current(games.APIS.index(forced) + 1 if forced in games.APIS else 0)
             self.lbl_api.grid(row=15, column=0, sticky="w", padx=(0, 14), pady=(6, 0))
@@ -3448,7 +3942,10 @@ class App:
         # Work out which routes exist for this game, which of them fit this
         # card, and preselect the best. The dropdown says so on every line,
         # and the choice stays the user's.
-        self.support = dlss.detect(g.install_dir, g.folder, g.api, g.bitness or 0, sm)
+        # The driver decides part of the recommendation: on 616.64+ every
+        # route that loads renodx-dlss5 goes through the path that faults.
+        self.support = dlss.detect(g.install_dir, g.folder, g.api, g.bitness or 0, sm,
+                                   driver=gpu.driver_version())
         self.route_fit = {o: dlss.fit(o, g.api, self.support.native_dlss, sm,
                                        upscaler=getattr(self.support, 'upscaler', ''))
                           for o in self.support.options}
@@ -3680,6 +4177,8 @@ class App:
             fg=bool(self.fg.get()) and getattr(self, 'route', None) == dlss.OPTI,
             mfg=bool(self.mfg.get()),
             vr=bool(self.vr.get()),
+            remix_swap=bool(self.remix_swap.get()) and
+            getattr(self, 'route', None) == dlss.REMIX,
             path=getattr(self, 'route', dlss.FEEDER),
             native_dlss=bool(self.support and self.support.native_dlss),
             upscaler=str(getattr(self.support, 'upscaler', '') or ''),
@@ -3725,9 +4224,13 @@ class App:
                 self.q.put(("done", rep))
             except installer.InstallError as e:
                 self.q.put(("fail", str(e)))
-            except Exception:
-                log.exception("installing")
-                self.q.put(("fail", traceback.format_exc()))
+            except Exception as e:
+                log.exception("installing", e)
+                if net.is_disk_full(e):
+                    self.q.put(("fail", net.disk_full_message(
+                        e, g.install_dir, net.CACHE)))
+                else:
+                    self.q.put(("fail", traceback.format_exc()))
         threading.Thread(target=work, daemon=True).start()
 
     def _uninstall(self) -> None:
@@ -3800,7 +4303,7 @@ class App:
             self._show(2)
             self._enter_library(asked=True)
         elif self.step == 2:
-            if not self.game:
+            if not self._can_install_page():
                 return
             self._show(3)
             self._enter_install()
@@ -3924,7 +4427,7 @@ class App:
                 elif kind == "swap":
                     self.bannerlbl.config(text="> restarting into the new build...")
                     self.root.update()
-                    selfupdate.apply_and_restart(payload)
+                    self._restart_into(payload)
                 elif kind == "updfail":
                     self.busy = False
                     self.bannerlbl.config(text=f"> update failed: {payload}")

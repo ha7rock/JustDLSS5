@@ -1,6 +1,7 @@
 """Session diagnostics and explicit tuning actions, executed by desktop workers."""
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import PureWindowsPath
 
 from .backend import autotune, diagnose, dlss, feedcfg, installer, optiscaler, wincrash
 
@@ -52,17 +53,27 @@ def analyse(entry, target=0):
     route = str(manifest.get("path") or "")
     crash = wincrash.last_crash(game.exe.name, since=diagnose._installed_at(folder) or 0) if game.exe else None
     related = current_crash(crash, folder)
+    if related and getattr(report, "never_ran", False) and ("/" in crash.module or "\\" in crash.module):
+        related = PureWindowsPath(crash.module).is_relative_to(PureWindowsPath(str(folder.resolve())))
     verdict = report.verdict
     if related and verdict.startswith("Working"):
         verdict = "模型曾运行，但 Windows 记录了游戏崩溃。 / The model ran, but Windows recorded a game crash."
-    lines = [verdict, *[f"[{item.level}] {item.title}\n{item.detail}" for item in report.findings]]
+    findings = list(report.findings)
+    if related and getattr(report, "never_ran", False):
+        verdict = "The game started, but Windows recorded a crash before the session was logged."
+        stale = ("has not been started since the install", "own files changed after",
+                 "is older than the install", "predates this install",
+                 "has not been run since installing", "play once and check again")
+        findings = [item for item in findings if not any(
+            text in (item.title + " " + item.detail).lower() for text in stale)]
+    lines = [verdict, *[f"[{item.level}] {item.title}\n{item.detail}" for item in findings]]
     if crash:
         description = wincrash.describe(crash, str(manifest.get("proxy") or ""), tuple(manifest.get("files") or []))
         if description:
             prefix = "" if related else "较早的崩溃记录 / Earlier crash record:\n"
             lines.append(prefix + "\n".join(description))
     result = SessionResult("", str(folder), route, verdict=verdict,
-                           findings=list(report.findings), log_time=getattr(report, "log_time", ""),
+                           findings=findings, log_time=getattr(report, "log_time", ""),
                            crash=crash, related_crash=related, target=target)
     if target and report.ran and not related and work_applies(game, route):
         resolution = autotune.ran_at(folder, route, 100)

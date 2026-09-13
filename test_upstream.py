@@ -58,6 +58,93 @@ class UpstreamTests(unittest.TestCase):
         decorate.start()
         self.addCleanup(decorate.stop)
 
+    def test_rescan_is_incremental_but_explicit_full_scan_is_not(self):
+        with patch.object(games, "scan_all", return_value=[self.game]) as full, \
+             patch.object(games, "quick_scan", return_value=([self.game], [])) as quick, \
+             patch.object(video, "known", return_value=None):
+            self.service.scan(lambda *args: None)
+            full.assert_called_once()
+            quick.assert_not_called()
+            self.service.scan(lambda *args: None)
+            self.assertEqual(quick.call_args.args[0], [self.game])
+            self.service.scan(lambda *args: None, full=True)
+            self.assertEqual(full.call_count, 2)
+
+    def test_incremental_scan_drops_deleted_manual_executable(self):
+        self.game.source = "Manual"
+        self.service._entries = [LibraryEntry(self.game, False)]
+        self.service._scan_ready = True
+        self.exe.unlink()
+        with patch.object(games, "list_games", return_value=[]), patch.object(video, "known", return_value=None):
+            self.assertEqual(self.service.scan(lambda *args: None), [])
+
+    def test_protected_architecture_choice_is_persisted_and_reinspected(self):
+        item = LibraryEntry(self.game, False)
+        with patch.object(games, "set_bitness_override") as save, \
+             patch.object(self.service, "select_executable", return_value=item) as inspect:
+            self.assertIs(self.service.set_architecture(item, 64), item)
+            save.assert_called_once_with(self.folder, 64)
+            inspect.assert_called_once_with(item, self.exe)
+            with self.assertRaises(ValueError):
+                self.service.set_architecture(item, True)
+
+    def test_driver_recommendation_preserves_existing_route(self):
+        from core import dlss, gpu
+        with patch.object(gpu, "driver_version", return_value="616.92"), \
+             patch.object(gpu, "hdr_on", return_value=False), \
+             patch.object(installer, "options_from_manifest", return_value=installer.Options(path=dlss.FEEDER)):
+            result = self.service.inspect(LibraryEntry(self.game, True))
+        self.assertEqual(result.support.recommended, dlss.STANDALONE)
+        self.assertEqual(result.options.path, dlss.FEEDER)
+        native = dlss.Support(native_dlss=True, recommended=dlss.NATIVE, options=[dlss.NATIVE, dlss.STANDALONE])
+        dlss._driver_steer(native, "616.92")
+        self.assertEqual(native.recommended, dlss.NATIVE)
+
+    def test_reinstall_keeps_original_for_uninstall(self):
+        dll = self.folder / "nvngx_dlss.dll"
+        dll.write_bytes(b"game original")
+        first = installer.Report()
+        installer._backup(dll, first, self.folder)
+        dll.write_bytes(b"installed component")
+        second = installer.Report(preinstalled={dll.name}, written=[dll.name])
+        installer._backup(dll, second, self.folder)
+        self.assertIn(dll.name + installer.BACKUP_SUFFIX, second.written)
+        installer._write_manifest(self.folder, self.game, installer.Options(), second, "dxgi.dll", "beta", True)
+        installer.uninstall(self.game)
+        self.assertEqual(dll.read_bytes(), b"game original")
+
+    def test_seven_zip_helper_with_wrong_hash_is_never_executed(self):
+        helper = self.root / "7zr.exe"
+        helper.write_bytes(b"wrong binary")
+        with patch.object(net, "download", return_value=helper), \
+             patch.object(optiscaler.subprocess, "run") as run:
+            self.assertFalse(optiscaler._seven_zr_extract(self.root / "input.7z", self.folder, 0))
+        run.assert_not_called()
+
+    def test_windows_crash_overrides_empty_session_but_not_other_folder(self):
+        from types import SimpleNamespace
+        from core import wincrash
+        from frontend.session import analyse
+        report = SimpleNamespace(verdict="Not run yet", never_ran=True, ran=False, findings=[
+            diagnose.Finding("warn", "The game has not been started since the install.")])
+        crash = wincrash.Crash("2026-09-13 07:00:00", "game.exe", str(self.exe), "0xc0000005", "Application Error")
+        with patch.object(diagnose, "analyse", return_value=report), \
+             patch.object(wincrash, "last_crash", return_value=crash):
+            result = analyse(LibraryEntry(self.game, True))
+            self.assertTrue(result.related_crash)
+            self.assertIn("Windows recorded a crash", result.verdict)
+            self.assertEqual(result.findings, [])
+            crash.module = str(self.root / "game-other" / "game.exe")
+            other = analyse(LibraryEntry(self.game, True))
+            self.assertFalse(other.related_crash)
+            self.assertEqual(other.verdict, report.verdict)
+            report.never_ran = False
+            report.verdict = "Working."
+            crash.module = r"C:\Windows\System32\nvwgf2umx.dll"
+            driver_crash = analyse(LibraryEntry(self.game, True))
+            self.assertTrue(driver_crash.related_crash)
+            self.assertIn("Windows recorded a game crash", driver_crash.verdict)
+
     def save(self):
         library.save([self.game], {}, self.service._cache_version(), 86)
 

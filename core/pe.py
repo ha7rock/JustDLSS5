@@ -449,6 +449,32 @@ _RUNTIME_SIBLING_MAX = 64 * 1024 * 1024
 _AMBIGUOUS = {"opengl32.dll", "vulkan-1.dll"}
 
 
+# Unreal ships as <root>/<Project>/Binaries/Win64/<X>-Shipping.exe with the
+# engine's own folder at <root>/Engine, and its shipping executables import
+# no graphics DLL at all - the RHI is loaded at run time. What IS in the
+# file is the string "opengl32.dll", from the OpenGL RHI its Windows builds
+# have not used since 4.27, and that made the tool call an Unreal game an
+# OpenGL one: ReShade would have gone in as opengl32.dll, which such a game
+# never loads, and the report would have come back with no log at all.
+# Found on the owner's own machine (WARDOGS, UE5) by detect_check.
+_UNREAL_BIN = ("win64", "wingdk", "winarm64")
+
+
+def _is_unreal(exe: Path) -> bool:
+    """The Unreal layout around this executable, by shape rather than name."""
+    parents = exe.parents
+    if len(parents) < 4:
+        return False
+    if parents[0].name.lower() not in _UNREAL_BIN:
+        return False
+    if parents[1].name.lower() != "binaries":
+        return False
+    try:
+        return (parents[3] / "Engine").is_dir()
+    except OSError:
+        return False
+
+
 def _engine_default(exe: Path, names: dict[str, Path] | None = None) -> tuple[str, str] | None:
     """(api, reason) when an engine module beside the exe settles it."""
     if names is None:
@@ -460,6 +486,13 @@ def _engine_default(exe: Path, names: dict[str, Path] | None = None) -> tuple[st
     for n, hit in _ENGINE_DEFAULT.items():
         if n in names and names[n].is_file():
             return hit
+    if _is_unreal(exe):
+        return ("DX12", "an Unreal Engine game (Binaries/Win64 beside the "
+                        "engine's own folder) - Direct3D 12 or 11, and "
+                        "ReShade goes in as dxgi.dll either way. The "
+                        "opengl32 name such an executable carries is "
+                        "Unreal's OpenGL RHI, which its Windows builds do "
+                        "not use")
     return None
 
 
@@ -613,10 +646,21 @@ def _score(exe: Path, folder: Path) -> float:
         pass
     # Very deep = probably a helper
     s -= rel.count("/") * 15
+    # Unity keeps the game's data in <exe name>_Data beside the player, and
+    # nothing else has one. The player exe itself is small - under a
+    # megabyte - so size alone ranked the launcher beside it higher (#152).
+    try:
+        if (exe.parent / f"{exe.stem}_Data").is_dir():
+            s += 300
+    except OSError:
+        pass
     return s
 
 
 _TRIAL = re.compile(r"[\s._-]*(trial|demo)$")
+# "UBOAT Launcher.exe" beside "UBOAT.exe": the launcher is the settings box
+# that starts the game, and ReShade in front of it hooks nothing (#152).
+_LAUNCHER = re.compile(r"[\s._-]*launcher$")
 
 
 def find_game_exes(folder: Path) -> list[Path]:
@@ -635,9 +679,10 @@ def find_game_exes(folder: Path) -> list[Path]:
     # the trial stays in the list for whoever plays it.
     stems = {(p.parent, p.stem.lower()) for p in cands}
     for p in cands:
-        base = _TRIAL.sub("", p.stem.lower())
-        if base != p.stem.lower() and (p.parent, base) in stems:
-            score[p] -= 600
+        for pat in (_TRIAL, _LAUNCHER):
+            base = pat.sub("", p.stem.lower())
+            if base != p.stem.lower() and (p.parent, base) in stems:
+                score[p] -= 600
     scored = sorted(cands, key=lambda p: score[p], reverse=True)
     # Drop obvious helpers, but never return nothing if that is all there is.
     good = [p for p in scored if score[p] > -500]

@@ -28,9 +28,11 @@ bug report arrived carrying exactly that and nothing else.
 """
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -79,12 +81,18 @@ def _standalone_named(name: str) -> bool:
 # error in one of those is noise, not a failure.
 FEED_SHADERS = ("dlss5_feed.fx", "lumenite_kernel.fx", "lumenite_quantmotion.fx")
 
+# A DLSS-NR dispatch line with a duration in it, whatever the fork calls the
+# number ("cost:", "elapsed:", ...). See the running/failed split below.
+_DISPATCH_MS = re.compile(r"\d+(?:[.,]\d+)?\s*ms\b")
+
 _DEPTH_HINT = (
     "In the ReShade overlay open the Add-ons tab and look at the depth "
     "buffer list: one has to be selected. If none is, or it switches when "
     "you change display mode, try 'Use aspect ratio heuristics' set to off "
     "there. Borderless, display scaling and an in-game render scale below "
-    "100% are the usual reason the buffer stops matching.")
+    "100% are the usual reason the buffer stops matching. If one is selected "
+    "and the depth is still flat, tick 'Copy depth buffer before clear "
+    "operations' on the same tab - Mass Effect Legendary Edition needs it.")
 
 _COMPILER_FIX = (
     "The game ships its own d3dcompiler_47.dll and it predates Shader Model "
@@ -108,6 +116,9 @@ class Report:
     route: str = ""
     findings: list[Finding] = field(default_factory=list)
     log_time: str = ""
+    # This verdict rests on there being no log at all: whoever has better
+    # evidence that the game ran (Windows' fault record) must replace it.
+    never_ran: bool = False
 
     def add(self, level: str, title: str, detail: str = "") -> None:
         self.findings.append(Finding(level, title, detail))
@@ -182,6 +193,35 @@ def _last_feed_session(text: str) -> str:
     for last in _FEED_SESSION.finditer(text):
         pass
     return text[last.start():] if last is not None and last.start() > 0 else text
+
+
+def _attached(text: str) -> bool:
+    """Did the feed add-on say it was loaded? Its own session marker, so a
+    build named something new is still recognised - and "detached" is not it."""
+    return bool(_FEED_SESSION.search(text or ""))
+
+
+# Everything the feed can say about the picture starts from the effect runtime
+# ReShade hands it. These are the lines that can only exist once it has one,
+# whatever the build calls the runtime itself.
+_FEED_GOT_RUNTIME = re.compile(
+    r"effect runtime|runtime \w+ initialis|effects:|technique|building:"
+    r"|feature ready|session ready|frame \d+", re.I)
+
+
+def _same_launch(feed: Path, reshade: Path, tol: float = 300.0) -> bool:
+    """Were these two logs written by the same run of the game?
+
+    The feed log's last session and ReShade's last session come out of two
+    files, and nothing else in the report ties them together: an add-on
+    removed between two launches would otherwise be reported as loaded, on
+    the strength of the older file. Unreadable or absent: say yes, and let
+    the finding that reads the text decide.
+    """
+    try:
+        return abs(feed.stat().st_mtime - reshade.stat().st_mtime) <= tol
+    except OSError:
+        return True
 
 
 # Both the feeder's crash handler and its evaluate guard print the module
@@ -433,6 +473,8 @@ def _analyse_optiscaler(install_dir: Path, rep: "Report", since: float,
                     f"works.")
             rep.verdict = ("OptiScaler's log is off - install again to switch it "
                            "on, then play once.")
+            # Also read off an absent log (#171).
+            rep.never_ran = True
         elif proxy_there:
             rep.add(WARN, "No OptiScaler log from this install yet.",
                     f"The proxy this install wrote ({proxy}) is in the folder "
@@ -441,6 +483,9 @@ def _analyse_optiscaler(install_dir: Path, rep: "Report", since: float,
                     f"that {proxy} sits next to the executable the game "
                     f"actually launches.")
             rep.verdict = "Not run yet, or OptiScaler did not load."
+            # Rests on the absent log, like the feeder one: Windows' own
+            # fault record for this game outranks it (#171).
+            rep.never_ran = True
         else:
             rep.add(BAD, "No OptiScaler log, and no proxy in the folder.",
                     (f"The proxy this install wrote ({proxy}) is not beside "
@@ -463,14 +508,18 @@ def _analyse_optiscaler(install_dir: Path, rep: "Report", since: float,
     nr = [(i, ln) for i, ln in enumerate(lines)
           if "DLSS-NR" in ln or "dlssnr" in ln.lower()]
     # "running at WxH" is the base build's line when the model is created.
-    # The forks also print the model's cost every frame it actually draws
-    # ("DlssNr_Dx12::Dispatch DLSS-NR cost: 7.41 ms total = 7.23 ms model"),
+    # The forks also print the model's timing every frame it actually draws,
     # and on wilsjo2's after-RR path that dispatch line is the ONLY thing
     # written - the report called a thirteen-minute session with a dispatch
-    # every frame "Inconclusive" (#81). A cost line is the strongest proof
-    # there is: the model cannot report a time for work it did not do.
-    running = [x for x in nr if "running at" in x[1]
-               or ("Dispatch" in x[1] and "cost" in x[1])]
+    # every frame "Inconclusive" (#81). A timing is the strongest proof there
+    # is: the model cannot report a time for work it did not do.
+    #
+    # The word in front of the number is the fork author's, and it changes:
+    #   "DlssNr_Dx12::Dispatch DLSS-NR cost: 7.41 ms total = 7.23 ms model"
+    #   "DlssNr_Dx12::Dispatch DLSS-NR elapsed: 6.72 ms total, 6.60 ms model"
+    # Matching "cost" called the second one - Spider-Man 2 dispatching every
+    # frame on wilsjo2 - "never reports it running" (#168). Ask for a dispatch
+    # and a duration instead, and let them name it what they like.
     failed = [x for x in nr if any(k in x[1] for k in (
         "create failed", "unavailable", "did not run", "not found beside",
         "would not load", "disabling for this session", "refused"))]
@@ -478,6 +527,17 @@ def _analyse_optiscaler(install_dir: Path, rep: "Report", since: float,
     # for, not what happened. Separating them keeps the "never ran" verdict
     # from sounding like the tool has no idea what went on.
     settings_only = [x for x in nr if re.search(r"DlssNr\.\w+:", x[1])]
+    # Asking only for a duration made three other kinds of line proof that the
+    # model ran: a create failure that reports how long it took, a setting
+    # whose name happens to contain the word ("DlssNr.DispatchInterval: 16 ms")
+    # and a dispatch that says it skipped. A line that is also a failure, also
+    # a setting, or says it did nothing is not evidence of work done.
+    _not_work = ("skip", "fail", "refus", "abort", "cancel", "no motion")
+    running = [x for x in nr
+               if x not in failed and x not in settings_only
+               and not any(k in x[1].lower() for k in _not_work)
+               and ("running at" in x[1]
+                    or ("Dispatch" in x[1] and _DISPATCH_MS.search(x[1])))]
     if "forwarder loaded" in text:
         rep.add(OK, "OptiScaler loaded and found the neural-rendering forwarder.")
     # The game is running on Vulkan while this route was installed for D3D12.
@@ -723,6 +783,7 @@ def _analyse_remix(install_dir: Path, rep: "Report", since: float,
                 f"loading at all - check the game's own d3d9.dll (the Remix "
                 f"bridge) is still beside the executable.")
         rep.verdict = "Not run yet, or the Remix runtime never loaded."
+        rep.never_ran = True
         return rep
     rep.ran = True
     try:
@@ -917,6 +978,7 @@ def _explain_no_log(install_dir: Path, man: dict, rep: Report,
                 f"The {app} was last run before this install, so nothing "
                 f"has loaded the new files yet. Play once and check again.")
         rep.verdict = "Installed after the last run - play once and check again."
+        rep.never_ran = True
         return rep
 
     # DXVK writes its own log beside the game the moment it loads. One of
@@ -969,11 +1031,33 @@ def _explain_no_log(install_dir: Path, man: dict, rep: Report,
                        f"rewrite the {bits}-bit Vulkan layer.")
         return rep
 
-    rep.add(WARN, f"The {app} has not been started since the install.",
-            "ReShade writes ReShade.log the moment it loads, and there is "
-            "none in the folder. All the files are still in place.")
-    rep.add(INFO, f"If you DID start it, it launches something other than "
-                  f"{exe}.",
+    # Did the game itself run? Its own files answer that, and the answer
+    # decides which of these is the headline (#182 and 33 others).
+    _ours_files = {str(f).replace("\\", "/").rsplit("/", 1)[-1].lower()
+                   for f in (man.get("files") or []) if isinstance(f, str)}
+    _ran_what, _ran_when = _game_ran(install_dir, str(man.get("exe") or ""),
+                                     _installed_at(install_dir) or 0.0,
+                                     _ours_files)
+    if _ran_what:
+        _clock = datetime.fromtimestamp(_ran_when).strftime("%d %b %H:%M")
+        rep.add(BAD, f"Something in the {app}'s own files changed after "
+                     f"the install.",
+                f"{_ran_what}, {_clock} - so it looks as though it has been "
+                f"run since, though a store update writes into a game folder "
+                f"too. ReShade writes ReShade.log the moment it loads and "
+                f"there is none, and everything is still in place: if it did "
+                f"run, it is the loading that failed rather than the "
+                f"install.")
+    else:
+        rep.add(WARN, f"The {app} has not been started since the install.",
+                "ReShade writes ReShade.log the moment it loads, and there is "
+                "none in the folder. Nothing the game itself writes has "
+                "changed since the install either. All the files are still in "
+                "place.")
+    rep.add(INFO,
+            f"The likeliest reason: it launches something other than {exe}."
+            if _ran_what else
+            f"If you DID start it, it launches something other than {exe}.",
             "A launcher or a different executable in another folder does not "
             "pick up the files here. Point the tool at the folder holding the "
             "executable that actually runs.")
@@ -993,11 +1077,229 @@ def _explain_no_log(install_dir: Path, man: dict, rep: Report,
                 "install page and install again.")
     elif proxy:
         alt = "d3d11.dll" if proxy.lower() == "dxgi.dll" else "dxgi.dll"
+        # The same mapping the crash override uses (gui._crash_overrides):
+        # optiscaler calls it 'loads as'; the feeder carries its
+        # motion-vector provider on that row and the ReShade name on one of
+        # its own; Remix installs no ReShade, so there is nothing to name.
+        # Naming a control that is not on the screen is #148's shape.
+        # Only the ReShade routes reach this function - analyse() hands
+        # optiscaler and remix to their own readers (:1389-1393) - so those
+        # two branches never fire today. Kept in step with the window all
+        # the same: a second copy that drifts is the bug itself.
+        _drop = ("'loads as'" if rep.route == "optiscaler"
+                 else "" if rep.route == "remix"
+                 else "'reshade loads as'")
         rep.add(INFO, f"Or the {app} ignores {proxy}.",
                 f"Some load the graphics DLLs in a way that skips {proxy}. "
-                f"Try the {alt} proxy name in the settings and install again.")
-    rep.verdict = f"Not started since the install - run the {app} once, then check again."
+                + (f"Set {_drop} to {alt} on the install page and install "
+                   f"again." if _drop else
+                   f"This route does not offer the proxy name on the page; "
+                   f"if the {app} starts with nothing else in the folder, "
+                   f"say so in an issue with this report."))
+    rep.verdict = (f"It looks as though it ran and nothing this install "
+                   f"wrote was loaded - most likely the proxy name or the "
+                   f"executable."
+                   if _ran_what else
+                   f"Not started since the install - run the {app} once, then "
+                   f"check again.")
+    # Said in a way the caller can act on: Windows' own fault record for this
+    # executable is proof the game DID start, and it outranks "there is no
+    # log" (#171 - GTA5.exe faulted eleven minutes before the report was
+    # written, and the answer told the person to run the game once).
+    rep.never_ran = True
     return rep
+
+
+# --- did the GAME run, whatever our own logs say? --------------------
+# The largest group of reports by a distance - 34 of the first 84 - is "no
+# log at all", and the answer to those began "the game has not been started
+# since the install". That is a guess, and to the half of them who HAD
+# started it, it is the sentence that makes a person give up: it blames
+# them for an install that did not load.
+#
+# A game that runs leaves its own traces - a log, a config, a save, a
+# shader cache - and not in one place, so three are looked at: the folder
+# holding the executable, its parents (Unreal keeps Saved/ two levels above
+# Binaries/Win64), and the per-user data folders where most engines
+# actually write (Unreal under LOCALAPPDATA, Unity under AppData LocalLow,
+# plenty of others under Documents/My Games).
+#
+# Bounded on purpose - directory entries and a wall clock, never a walk
+# (scan budgets, #8 #18 #32).
+_RAN_LOOK = ("", "Saved/Logs", "Saved/SaveGames", "Saved/Config/WindowsClient",
+             "Saved/Config/Windows", "Saved", "Logs", "logs", "Config",
+             "config", "SavedGames", "profiles", "Profiles", "UserData",
+             "savegames")
+_RAN_PARENTS = 3
+_RAN_ENTRIES = 4000
+# Per directory as well as in total: a game folder inside steamapps/common
+# sits beside every other game the person owns, and one directory like that
+# would spend the whole budget before the places that actually answer are
+# reached.
+_RAN_PER_DIR = 400
+_RAN_SECONDS = 1.0
+# Ours, and the files that say nothing about a game having run.
+_RAN_SKIP = {"reshade.log", "dlss5-feed.log", "optiscaler.log",
+             "standalone-dlssnr.log", "dlss5-autopilot.json",
+             "dlss5-feed-host64.log", "reshade.ini", "reshadepreset.ini",
+             "dlss5-feed.cfg", "dlss5-feed-crash.dmp"}
+_RAN_SKIP_SUFFIX = (".dlss5-autopilot-backup", ".tmp")
+# Nothing with one of these is a game leaving a trace - they are what an
+# install puts there. Our own files are never evidence about the game
+# ([[dlss5-own-files-not-candidates]] is the same lesson one layer out).
+_RAN_NOT_EVIDENCE = (".dll", ".addon64", ".addon32", ".fx", ".fxh", ".asi",
+                     ".json", ".7z", ".zip", ".pdb",
+                     # An executable's timestamp moves when the store
+                     # updates the game, which is not a session: Crimson
+                     # Desert answered with its own .exe on this machine.
+                     ".exe")
+# And an install writes its own files in a second or two, so anything
+# within a minute of it is the install, not a session. A game run that
+# started inside that minute is missed, and the older answer is given -
+# which is the safe way round.
+_RAN_MARGIN = 60.0
+# Folders that are a step on the way to the game rather than the game: the
+# walk climbs THROUGH these and stops at the first one that is not, which is
+# the game's own root. Without that it kept climbing into the launcher -
+# Steam rewrites Steam\logs\webhelper.txt every session, and a game under
+# steamapps/common is three levels below it, so every Steam game with no
+# ReShade.log was told "it ran, and nothing this install wrote was loaded"
+# on the strength of Steam's own log.
+_RAN_CONTAINERS = ("binaries", "win64", "win32", "wingdk", "winarm64", "bin",
+                   "bin64", "x64", "x86", "retail", "shipping", "game")
+# Never the name of THIS game's per-user folder, whatever the path says.
+_RAN_NOT_A_NAME = _RAN_CONTAINERS + (
+    "common", "steamapps", "steamlibrary", "steam", "epic games", "gog galaxy",
+    "gog games", "ubisoft", "ubisoft game launcher", "origin games", "ea games",
+    "ea", "battle.net", "riot games", "amazon games", "xboxgames",
+    "program files", "program files (x86)", "games", "program data")
+
+
+def _user_data_names(install_dir: Path, exe: str) -> list[str]:
+    """What this game's per-user folder is plausibly called."""
+    names: list[str] = []
+    stem = Path(exe or "").stem
+    for cut in ("-Win64-Shipping", "-WinGDK-Shipping", "-Win32-Shipping",
+                "-Shipping"):
+        if stem.lower().endswith(cut.lower()):
+            stem = stem[: -len(cut)]
+    if stem:
+        names.append(stem)
+        for tail in ("Client", "Game", "_x64", "64"):
+            if stem.lower().endswith(tail.lower()) and len(stem) > len(tail):
+                names.append(stem[: -len(tail)])
+    # Up through the container folders only. One more step and this is the
+    # launcher's name, and %LOCALAPPDATA%\Steam is not this game's data.
+    p = install_dir
+    for _ in range(_RAN_PARENTS + 1):
+        if p.name:
+            names.append(p.name)
+        if p.name.lower() not in _RAN_CONTAINERS or p.parent == p:
+            break
+        p = p.parent
+    out: list[str] = []
+    low: set[str] = set()
+    for n in names:
+        n = n.strip()
+        if n and n.lower() not in low and n.lower() not in _RAN_NOT_A_NAME:
+            low.add(n.lower())
+            out.append(n)
+    return out[:6]
+
+
+def _user_data_roots() -> list[Path]:
+    """Where engines keep per-user game data on Windows."""
+    roots: list[Path] = []
+    local = os.environ.get("LOCALAPPDATA")
+    app = os.environ.get("APPDATA")
+    if local:
+        roots.append(Path(local))
+        roots.append(Path(local + "Low"))
+    if app:
+        roots.append(Path(app))
+    try:
+        home = Path.home()
+        roots.append(home / "Documents" / "My Games")
+        roots.append(home / "Saved Games")
+    except (OSError, RuntimeError):
+        pass
+    return roots
+
+
+def _game_ran(install_dir: Path, exe: str, since: float,
+              ours: set[str]) -> tuple[str, float]:
+    """(what the game wrote after the install, when), or ("", 0).
+
+    Evidence, not proof: a Steam update writes into a game folder too. It
+    is reported as exactly what it is - something in the game's own files
+    changed after the install.
+    """
+    if not since:
+        return "", 0.0
+    since += _RAN_MARGIN
+    deadline = time.monotonic() + _RAN_SECONDS
+    seen = 0
+    best, best_t = "", 0.0
+    places: list[tuple[Path, Path]] = []
+    # The per-user folders first: they are small, they are named after this
+    # game, and they are where most engines actually write.
+    names = _user_data_names(install_dir, exe)
+    for base in _user_data_roots():
+        for n in names:
+            d = base / n
+            for rel in _RAN_LOOK:
+                places.append((d, d / rel if rel else d))
+    # Then the folder holding the executable, and only the NAMED subfolders
+    # of its parents. A parent itself is somebody else's ground - a game
+    # under steamapps/common shares it with every other game installed, and
+    # a file in there says nothing about this one.
+    root = install_dir
+    for depth in range(_RAN_PARENTS + 1):
+        for rel in _RAN_LOOK:
+            if rel:
+                places.append((root, root / rel))
+            elif depth == 0:
+                places.append((root, root))
+        # Unreal keeps Saved/ two levels above Binaries/Win64, which is the
+        # only reason this climbs at all - so it climbs only while it is
+        # standing in one of those container folders. At the game's own root
+        # it stops: the next level up is steamapps/common, and the one above
+        # that is Steam itself, whose logs and config it was reading.
+        if root.parent == root or root.name.lower() not in _RAN_CONTAINERS:
+            break
+        root = root.parent
+    for shown_from, d in places:
+        if seen > _RAN_ENTRIES or time.monotonic() > deadline:
+            break
+        try:
+            # islice, not list()[:n]: a folder with 100k entries would be
+            # materialised in full before the slice bounded anything.
+            with os.scandir(d) as it:
+                entries = list(itertools.islice(it, _RAN_PER_DIR))
+        except OSError:
+            continue
+        for e in entries:
+            seen += 1
+            if seen > _RAN_ENTRIES or time.monotonic() > deadline:
+                break
+            low = e.name.lower()
+            if low in _RAN_SKIP or low in ours \
+                    or low.endswith(_RAN_SKIP_SUFFIX) \
+                    or low.endswith(_RAN_NOT_EVIDENCE):
+                continue
+            try:
+                if not e.is_file():
+                    continue
+                t = e.stat().st_mtime
+            except OSError:
+                continue
+            if t > since and t > best_t:
+                try:
+                    best = str(Path(e.path).relative_to(shown_from))
+                except ValueError:
+                    best = e.name
+                best_t = t
+    return best, best_t
 
 
 def _shader_failures(rtext: str, provider_tech: str, rep: Report) -> None:
@@ -1045,6 +1347,24 @@ def analyse(install_dir: Path) -> Report:
     # downloaded reported as "MISSING" as if antivirus had eaten them.
     # Nothing below this can mean anything until the install is finished.
     if man.get("complete") is False:
+        from . import net as _net
+        if _net.DISK_FULL_NOTE in (man.get("notes") or []):
+            rep.add(BAD, "The install stopped because the drive was full.",
+                    "Whatever had not been written yet is missing, which is "
+                    "why files are listed as gone. Free up a few hundred MB "
+                    "on the game's drive and on the one %LOCALAPPDATA% is on, "
+                    "then press INSTALL again.")
+            rep.verdict = "The drive was full - free up space and install again."
+            return rep
+        stopped = next((n[len(_net.STOP_NOTE):] for n in (man.get("notes") or [])
+                        if isinstance(n, str) and n.startswith(_net.STOP_NOTE)), "")
+        if stopped:
+            rep.add(BAD, "The install was stopped before it finished.",
+                    f"It said: {stopped.rstrip('.')}. Whatever came before "
+                    f"that step is in "
+                    f"place; nothing after it was written.")
+            rep.verdict = "The install stopped for a reason of its own - see below."
+            return rep
         # An uninstall that could not remove everything records itself the
         # same way, and telling that person to install again is the opposite
         # of what they need. Its own note says which it was.
@@ -1099,6 +1419,14 @@ def analyse(install_dir: Path) -> Report:
     # Only the last launch describes what the person just saw. Everything
     # before it belongs to an install that may not even be this route.
     rtext = _last_session(_tail(reshade, 250_000))
+    # A file with nothing in it is not a log. ReShade creates ReShade.log
+    # when it attaches and a game that dies on the next breath leaves it
+    # empty - which used to read as "ReShade ran and loaded no add-ons",
+    # printed above a report block saying "(none)" (#182). Whitespace is
+    # the same thing: #155 covered a log whose lines nothing reads, not a
+    # log with no lines.
+    if not rtext.strip():
+        rtext = ""
 
     if text and since and not _fresh(feed, since):
         rep.add(WARN, "The log predates the current install.",
@@ -1300,10 +1628,15 @@ def analyse(install_dir: Path) -> Report:
         # vkCreateSwapchainKHR instead, so looking only for the DXGI ones
         # called every Vulkan session a game that never drew a frame, right
         # next to "frames are being processed". Seen on Bayonetta via DXVK.
+        # And whatever the API: a frame the feed delivered was drawn. OpenGL
+        # has no swap-chain line of either kind, and Octowow (#156) - running,
+        # frames delivered at 3440x1440 - was told it closed before it drew
+        # anything, above the finding that said frames were processed.
+        drew = bool(re.search(r"frame \d+ (?:delivered|evaluated)", text or ""))
         if "Registered add-on" in rtext and "Exiting" in rtext \
                 and "CreateSwapChain" not in rtext and "Presenting" not in rtext \
                 and "vkCreateSwapchainKHR" not in rtext \
-                and not d3d9_only:
+                and not d3d9_only and not drew:
             rep.add(BAD, "The game closed before it drew a single frame.",
                     "ReShade attached and the device was created, but no swap "
                     "chain ever was, so the game quit during start-up. That "
@@ -1317,10 +1650,58 @@ def analyse(install_dir: Path) -> Report:
         # prefixes an add-on's own lines with its name in brackets, and a
         # line like that is proof enough on its own.
         wrote = re.search(r"\|\s*(?:INFO|WARN|ERROR)\s*\|\s*\[[^\]]+\]", rtext)
-        if "Registered add-on" not in rtext and not wrote:
-            rep.add(BAD, "ReShade loaded no add-ons.",
-                    "Add-on support requires the ReShade build WITH add-ons, "
-                    "and AddonPath must point at the game folder.")
+        # And the add-on keeps a log of its own. ReShade is the only thing
+        # that loads it, so a feed log from this session says the add-on was
+        # loaded even when the ReShade tail no longer holds a line about it:
+        # Web of Shadows had a folder full of shader packs, the compile lines
+        # pushed the registrations out of the tail, and the answer was "no
+        # add-ons loaded" directly above a feed that had attached and hooked
+        # the game (#164). The add-on's own word beats a cut log.
+        # Two things this must NOT do. It must not speak for a different
+        # launch: the feed log's last session and ReShade's last session are
+        # read from two files, so an add-on removed between launches would be
+        # reported as loaded from the older feed log. And it must not speak
+        # for an older install - that is what the warning above it is for.
+        attached = bool(_attached(text) or _attached(htext))
+        if attached and since and not _fresh(feed, since):
+            attached = False
+        if attached and not _same_launch(feed, reshade):
+            attached = False
+        # The standalone route has no feed log; its add-on keeps one of its own,
+        # in LOCALAPPDATA, and ReShade is equally the only thing that loads it.
+        # Without this the same cut tail says "no add-ons" to that route.
+        if not attached and rep.route == "standalone":
+            try:
+                stext = _tail(STANDALONE_LOG, 150_000)
+            except OSError:
+                stext = ""
+            attached = _STANDALONE_SESSION in stext
+            if attached and since and not _fresh(STANDALONE_LOG, since):
+                attached = False
+        if "Registered add-on" not in rtext and not wrote and attached:
+            rep.add(OK, "The add-on loaded - it wrote its own log in the "
+                        "session this report reads.",
+                    "ReShade's own log no longer holds the registration line "
+                    "(a long log is read from its tail), but nothing except "
+                    "ReShade loads this add-on.")
+        if "Registered add-on" not in rtext and not wrote and not attached:
+            if _reshade_died_early(rtext):
+                rep.add(BAD, "ReShade attached and the session ended before "
+                             "anything else happened.",
+                        "Its log holds nothing but the start-up lines - no "
+                        "add-on, no runtime, no swap chain - so the game was "
+                        "gone a moment later. That is the game closing during "
+                        "start-up rather than anything about the add-ons. "
+                        "Uninstall (the game's own files go back), check it "
+                        "starts on its own, then install again"
+                        + ("." if rep.route in ("feeder", "remix", "optiscaler")
+                           else " and try another name in the 'reshade loads "
+                                "as' dropdown on the install page."))
+            else:
+                rep.add(BAD, "ReShade loaded no add-ons.",
+                        "Add-on support requires the ReShade build WITH "
+                        "add-ons, and AddonPath must point at the game "
+                        "folder.")
             if (man.get("proxy") or "").lower() == "opengl32.dll":
                 rep.add(INFO, "Or this log is from another program's ReShade.",
                         "This install went in as opengl32.dll, which only "
@@ -1358,14 +1739,38 @@ def analyse(install_dir: Path) -> Report:
             found = False
         else:
             found = None
+        # "MISSING" right after a runtime starts is often just "not compiled
+        # yet": the feed says so ("has not resolved yet ... waiting 10 s")
+        # and decides later. A game that closes inside those ten seconds
+        # never got the later answer - Half Sword (#142) died of "out of
+        # video memory" one second in and was told the shader never loaded,
+        # and that its motion-vector shader was not installed, over a file
+        # list showing both in place.
+        last_missing = max((m.end() for m in re.finditer(
+            r"DLSS5_Feed\.fx technique MISSING", text)), default=-1)
+        tail = text[last_missing:] if last_missing >= 0 else ""
+        pending = found is False and "DLSS5_Feed.fx has not resolved yet" in tail \
+            and "is not loaded" not in tail and "technique found" not in tail \
+            and not re.search(r"frame \d+ (?:delivered|evaluated)", tail)
         if found:
             rep.add(OK, "DLSS5_Feed.fx loaded and its textures were found.")
+        elif pending:
+            rep.add(WARN, "The game closed while ReShade was still compiling "
+                          "the effects.",
+                    "The feed waits a few seconds for DLSS5_Feed.fx to compile "
+                    "before it calls it missing, and the session ended inside "
+                    "that wait - so nothing here says the shader is broken. "
+                    + ("Start" if re.search(r"frame \d+ (?:delivered|evaluated)", text) else
+                       "If the game closed on its own, it closed before the "
+                       "feed handed DLSS 5 a single frame: start")
+                    + " it again and give it that time, and check it "
+                    "starts without the install if it closes again.")
         elif found is False:
             rep.add(BAD, "DLSS5_Feed.fx never loaded.",
                     "Check the ReShade overlay for a compile error and that "
                     "reshade-shaders\\Shaders holds DLSS5_Feed.fx.")
 
-        if prov:
+        if prov and not pending:
             _n, name, _t, state = prov[-1]
             if "enabled" in state:
                 rep.add(OK, f"Motion vectors: {name} is enabled.")
@@ -1601,7 +2006,7 @@ def analyse(install_dir: Path) -> Report:
                     "The stack is " + " <- ".join(chain[:5]) + ". The feed "
                     "asked the runtime for a neural frame and the runtime "
                     "faulted, so no feeder build changes it. Try another "
-                    "'DLSS 5 add-on' build from the install page, and if the "
+                    "'dlss5 add-on' build from the install page, and if the "
                     "driver is 616.64 or newer, "
                     + ("try the standalone route (it does not load "
                        "renodx-dlss5), or " if _sa else "")
@@ -1723,11 +2128,33 @@ def analyse(install_dir: Path) -> Report:
         if perf:
             rep.add(INFO, f"{perf.group(1)} frames at {perf.group(3)} fps, "
                           f"{perf.group(2)} ms/frame spent on the feed.")
+        # Frames came, and then the feed said it stopped - "the 64-bit host
+        # went away" on a 32-bit game, and the game carries on without the
+        # pass. Octowow (#156) was called "Working." on exactly that log
+        # whenever the helper's own log was not in the folder to name the
+        # fault.
+        last_frame = max((m.end() for m in re.finditer(
+            r"frame \d+ (?:delivered|evaluated)", text or "")), default=-1)
+        stop = None
+        for m in re.finditer(r"stopped: ([^\n]+)", text or ""):
+            if m.start() > last_frame:
+                stop = m
         if old_compiler:
             rep.add(BAD, "The game's own d3dcompiler_47.dll is too old for "
                          "the neural pass.", _COMPILER_FIX)
             rep.verdict = ("Frames flow, but neural rendering is silently doing "
                            "nothing - old d3dcompiler_47.dll in the game folder.")
+        elif stop is not None:
+            why = stop.group(1).split(" -- ")[0].strip().rstrip(".")
+            rep.add(BAD, f"The feed stopped after frame {delivered[-1]}: {why}.",
+                    "The game kept running without the pass from that point. "
+                    + ("On a 32-bit game the pass runs in a 64-bit helper; "
+                       "host64\\dlss5-feed-host.log, when it is there, says why "
+                       "it ended. If that is a crash inside NVIDIA's runtime "
+                       "on driver 616.64 or newer, 616.56 is the test."
+                       if "host" in why else
+                       "dlss5-feed.log has the lines just before it."))
+            rep.verdict = "It started, then the feed stopped - see why below."
         else:
             rep.verdict = "Working."
     elif ready:
@@ -1790,7 +2217,37 @@ def analyse(install_dir: Path) -> Report:
                 rep.verdict = ("The bridge's substitute is off - install the "
                                "bridge route again.")
     else:
-        rep.verdict = "Inconclusive - the feed did not get far enough to tell."
+        # A log that stops at the hooks it installed is not "did not get far
+        # enough" in some vague way: everything the feed can say about the
+        # picture starts from the effect runtime ReShade hands it, and that
+        # log says it never got one (Web of Shadows, #164: eight lines, and
+        # the answer named none of them). Which of the two ends is at fault is
+        # not in this log, so ask for what would tell us instead of guessing.
+        #
+        # The absence of ONE wording is not that evidence, though - the word
+        # "effect runtime" is one build's. Ask for the absence of every line
+        # that can only be written once a runtime exists: a technique state, a
+        # build, a frame. With any of those present this is a different answer
+        # and the findings above have already given it.
+        if _attached(text) \
+                and not _FEED_GOT_RUNTIME.search(text or "") \
+                and not _FEED_GOT_RUNTIME.search(htext or ""):
+            rep.add(WARN, "The add-on loaded, and ReShade never handed it an "
+                          "effect runtime.",
+                    "Everything the feed does starts from that runtime, and "
+                    "its log stops at the hooks it installed. Open the "
+                    "ReShade overlay in the game and check that 'DLSS 5 Feed' "
+                    "is ticked in the effect list - and if it is, send "
+                    "dlss5-feed.log and ReShade.log whole: this pair of logs "
+                    "cannot say which side stopped.")
+            rep.verdict = ("The add-on loaded but ReShade never gave it an "
+                           "effect runtime - check 'DLSS 5 Feed' is ticked in "
+                           "the overlay.")
+        elif _reshade_died_early(rtext):
+            rep.verdict = ("It started and closed during start-up - ReShade "
+                           "attached and nothing else got to run.")
+        else:
+            rep.verdict = "Inconclusive - the feed did not get far enough to tell."
 
     return rep
 
@@ -1969,6 +2426,10 @@ def _analyse_standalone(rep: Report, since: float, reshade_ran: bool) -> Report:
                 f"once and check again.")
         rep.verdict = ("Add-on loaded, but its own log has nothing yet - play "
                        "once and check again.")
+        # A fresh ReShade.log is a record of this session, and this verdict is
+        # built on it - so a fault record must not rewrite it into "nothing
+        # here recorded the session".
+        rep.never_ran = not reshade_ran
         return rep
     try:
         rep.log_time = datetime.fromtimestamp(p.stat().st_mtime).strftime("%d %b %H:%M")
@@ -1979,6 +2440,8 @@ def _analyse_standalone(rep: Report, since: float, reshade_ran: bool) -> Report:
                 "It is one file for every game the add-on ran in, and it was "
                 "last written before this install. Play once and check again.")
         rep.verdict = "Installed after the last run - play once and check again."
+        # As above: a fresh ReShade.log is a record of this session.
+        rep.never_ran = not reshade_ran
         return rep
     # One log for every game: only the last session can describe this one.
     cut = text.rfind(_STANDALONE_SESSION)
@@ -2069,6 +2532,38 @@ _RESHADE_KEEP = ("WARN", "ERROR", "Registered add-on", "CreateSwapChain",
                  "Direct3DCreate9", "Exiting", "EvaluateFeature")
 # What a report's ReShade.log excerpt gives up last when it is over budget:
 # the lines the diagnosis itself reads, then which add-ons loaded.
+# Lines that can only be written once ReShade got somewhere: an add-on
+# registered, a factory call redirected, a runtime or swap chain created, an
+# effect compiled, a clean exit. A last session with NONE of them is ReShade
+# attaching and the process ending on the next breath - which is a game that
+# died during start-up, not a ReShade built without add-on support (#182,
+# Resident Evil 4: "it never started", and the report said "ReShade loaded
+# no add-ons" over a log block that read "(none)").
+_RESHADE_GOT_GOING = ("registered add-on", "redirecting", "initialized runtime",
+                      "swap chain", "swapchain", "compiled", "exiting",
+                      "effect", "created")
+
+
+# ReShade's first line of every session. It has to be there for "the
+# session ended right after it attached" to mean anything: a log read from
+# its tail, or a session slice that begins in the middle, has no start-up
+# line and no marker either - which is not the same fact at all. Three real
+# reports (#34, #63, #64) said so the moment the corpus was replayed.
+_RESHADE_STARTED = "initializing crosire"
+
+
+def _reshade_died_early(rtext: str) -> bool:
+    """Did ReShade's last session end before it did anything at all?
+
+    Only when the session is whole - it begins where ReShade began - and
+    holds none of the lines that say it got somewhere.
+    """
+    low = (rtext or "").lower()
+    if _RESHADE_STARTED not in low:
+        return False
+    return not any(k in low for k in _RESHADE_GOT_GOING)
+
+
 _RESHADE_FIRM = ("EvaluateFeature",)
 _RESHADE_ALSO = ("Registered add-on",)
 _HOOK_ADDRESSES = re.compile(r" with 0x[0-9A-Fa-f]+ => 0x[0-9A-Fa-f]+")
@@ -2083,6 +2578,13 @@ def _reshade_excerpt(text: str, n: int = 25, budget: int = 1500) -> list[str]:
     Over budget, the lines nothing reads go first.
     """
     kept = [ln for ln in text.splitlines() if any(k in ln for k in _RESHADE_KEEP)]
+    if not kept and text.strip():
+        # A log with none of those lines is still a log: ReShade started and
+        # stopped before any add-on registered. The report printed "(none)"
+        # for it (#155), which reads as "ReShade never loaded" - the opposite
+        # - and left nothing to replay.
+        return [_HOOK_ADDRESSES.sub("", ln.rstrip())[:200]
+                for ln in text.splitlines() if ln.strip()][-min(n, 12):]
     # A 250 KB tail can hold thousands of these; only the newest of each
     # kind can end up in the excerpt, so the rest are not looked at twice.
     firm = set(sorted(i for i, ln in enumerate(kept)
@@ -2120,6 +2622,37 @@ def _block(title: str, lines: list[str], budget: int) -> str:
     if len(body) > budget:
         body = "...\n" + body[-budget:].split("\n", 1)[-1]
     return f"\n**{title}**\n```\n{body}\n```\n"
+
+
+def _their_provider(install_dir: Path, prov: str, man: dict) -> str:
+    """Where the person's own copy of the provider shader is, or "".
+
+    The installer leaves a pack that is already there alone (a second
+    technique of the same name is a red error in ReShade's overlay), so the
+    place the install WOULD have written to is empty by design.
+
+    Only when it really did not write it. A file OUR install wrote and
+    something has since removed is the quarantine case #13 and #84 exist for,
+    and "your own copy is used" would hide it - so the manifest's own file
+    list has the last word, and is what the installer itself asks.
+    """
+    want = ("reshade-shaders/shaders/" + prov).lower()
+    ours = [f for f in (man.get("files") or []) if isinstance(f, str)]
+    if any(f.replace("\\", "/").lower() == want for f in ours):
+        return ""                       # we wrote it; it is gone, say so
+    try:
+        from . import installer as _inst
+        hit = _inst.foreign_lumenite(Path(install_dir), ours, marker=prov)
+    except Exception:
+        return ""
+    if not hit:
+        return ""
+    try:
+        return str(Path(hit).relative_to(install_dir)).replace("\\", "/")
+    except ValueError:
+        # Can only come out of rglob under install_dir, so this is
+        # unreachable - and a full path must never reach a published report.
+        return ""
 
 
 # DLSS5_MV_PROVIDER -> the shader file the feeder needs for it.
@@ -2211,6 +2744,7 @@ def _presence(install_dir: Path, man: dict, route: str) -> list[str]:
         names.append("host64/nvngx_dlssnr.dll")
     else:
         names.append("nvngx_dlssnr.dll")
+    prov = None
     if route == "feeder":
         # The feed is a shader technique plus a motion-vector provider; when
         # either file is gone the add-ons load and nothing happens (issue
@@ -2224,6 +2758,20 @@ def _presence(install_dir: Path, man: dict, route: str) -> list[str]:
     for n in dict.fromkeys(names):
         state = "present" if (install_dir / n).is_file() else "MISSING"
         out.append(f"- {n}: {state}")
+        if state == "MISSING" and route == "feeder" and prov \
+                and n.endswith(prov):
+            # The install does not write this one when the person already has
+            # the pack: their copy is used, wherever they keep it under
+            # reshade-shaders. Reporting the place we would have written to as
+            # MISSING sent Web of Shadows (#164) looking for a file the
+            # install had deliberately not put there.
+            mine = _their_provider(install_dir, prov, man)
+            if mine:
+                # Whether ReShade loads that copy depends on its own
+                # EffectSearchPaths, which nothing here reads - so say where
+                # the file is, not that it is the one in use.
+                out[-1] = (f"- {n}: not written by this install - your own "
+                           f"copy is at {mine}")
     out += extra
     # The game's own compiler beside the exe is the cause of the silent
     # "frames flow, nothing happens" case; worth a line whenever it is there.
@@ -2341,9 +2889,16 @@ def issue_body(version: str, gpu_name: str, sm, driver: str, game, route: str,
         # log is enormous and the rest of it is path-tracing chatter.
         from . import remix as _remix
         rtx_log = _tail(_remix.log_path(d), 300_000)
-        parts.append(_block("remix-dxvk.log", _last_lines(
+        nr_lines = _last_lines(
             rtx_log, 20, lambda ln: "DLSS-NR" in ln or "dlssnr" in ln.lower()
-            or "Neural" in ln), 1200))
+            or "Neural" in ln)
+        # A log with no such line is itself the answer (the runtime never
+        # tried the pass) - say so, with its last lines, rather than "(none)",
+        # which reads as no log at all (#155 had the same shape).
+        if not nr_lines and rtx_log.strip():
+            nr_lines = (["(no DLSS-NR line in this log - its last lines:)"]
+                        + _last_lines(rtx_log, 8))
+        parts.append(_block("remix-dxvk.log", nr_lines, 1200))
     if last_error:
         parts.append(f"\n**Last error**\n```\n{last_error[-900:]}\n```\n")
     parts.append(_block(

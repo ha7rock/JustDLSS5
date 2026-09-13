@@ -8,6 +8,19 @@ import re
 
 
 _MESSAGES = r"""
+The install stopped because the drive was full.|磁盘空间不足，安装已中止。
+The install was stopped before it finished.|安装未完成，已中止。
+The add-on loaded - it wrote its own log in the session this report reads.|本次运行中插件已加载，并写入了日志。
+ReShade attached and the session ended before anything else happened.|ReShade 已加载，但游戏随即退出。
+The game closed while ReShade was still compiling the effects.|ReShade 尚在编译效果时，游戏退出了。
+The add-on loaded, and ReShade never handed it an effect runtime.|插件已加载，但未收到 ReShade 的效果运行环境。
+The drive was full - free up space and install again.|磁盘空间不足。请清理空间后重新安装。
+The install stopped for a reason of its own - see below.|安装已中止，原因见下方。
+It started, then the feed stopped - see why below.|画面传输启动后中断，原因见下方。
+The add-on loaded but ReShade never gave it an effect runtime - check 'DLSS 5 Feed' is ticked in the overlay.|插件已加载，但效果未运行。请在 ReShade 浮层中勾选 DLSS 5 Feed。
+It started and closed during start-up - ReShade attached and nothing else got to run.|游戏在启动过程中退出，只有 ReShade 留下了加载记录。
+It looks as though it ran and nothing this install wrote was loaded - most likely the proxy name or the executable.|文件变化表明游戏可能运行过，但未加载本次安装的组件。请检查加载文件名和目标程序。
+The game started, but Windows recorded a crash before the session was logged.|游戏已启动，但在写入运行日志前崩溃了。
 Working.|神经渲染已运行。
 Every DLSS evaluate faults inside NVIDIA's NGX runtime (D3D12Core.dll <- nvngx_dlssnr.dll <- _nvngx.dll <- renodx-dlss5).|每次 DLSS 求值均在 NVIDIA NGX 运行库内发生异常（D3D12Core.dll ← nvngx_dlssnr.dll ← _nvngx.dll ← renodx-dlss5）。
 On 32-bit the DLSS 5 page in the game's overlay drives the 64-bit helper; the helper's own window is there too, but do not alt-tab to it while playing - that minimizes the game and tears the feature down.|32 位游戏通过游戏浮层中的 DLSS 5 页面控制 64 位辅助进程。游玩时不要切换到辅助进程窗口，否则游戏会最小化并中断渲染功能。
@@ -146,6 +159,8 @@ MESSAGES = dict(line.split("|", 1) for line in _MESSAGES.strip().splitlines())
 # Captures are inserted unchanged. Full matching avoids translating an excerpt
 # from an unrelated message whose wording happens to share a prefix.
 _PATTERNS = [
+    (r"Something in the (.+)'s own files changed after the install\.", "安装后，{0} 的文件发生过变化，可能运行过游戏。"),
+    (r"The likeliest reason: it launches something other than (.+)\.", "可能启动了其他程序。请确认实际运行的游戏程序是否为 {0}。"),
     (r"Driver 616\.64\+ faults inside NGX even with renodx-dlss5 (.+) - try the standalone route, or roll the driver back to 616\.56\.", "驱动 616.64 及更新版本在 renodx-dlss5 {0} 下仍出现 NGX 异常。可尝试 Standalone 路线，或回退至驱动 616.56。"),
     (r"Driver 616\.64\+ faults inside NGX even with renodx-dlss5 (.+) - roll the driver back to 616\.56\.", "驱动 616.64 及更新版本在 renodx-dlss5 {0} 下仍出现 NGX 异常，上游建议回退至驱动 616.56。"),
     (r"Driver 616\.64\+ faults with renodx-dlss5 4\.6/4\.7 - install again \(the tool pins 4\.55\), or try the standalone route\.", "驱动 616.64 及更新版本与 renodx-dlss5 4.6/4.7 存在异常。请重新安装以使用固定的 4.55 版本，或尝试 Standalone 路线。"),

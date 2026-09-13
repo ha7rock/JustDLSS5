@@ -38,7 +38,82 @@ def clear_cache() -> None:
         shutil.rmtree(CACHE, ignore_errors=True)
 
 
+# errno 28 is what Python says; ERROR_DISK_FULL (112) and
+# ERROR_HANDLE_DISK_FULL (39) are what Windows says underneath it.
+_FULL_ERRNO = 28
+_FULL_WINERROR = (112, 39)
+# The note an install that stopped on a full drive leaves in its record,
+# for the diagnosis to read.
+STOP_NOTE = "install stopped: "
+DISK_FULL_NOTE = STOP_NOTE + "the drive ran out of space"
+
+
+def is_disk_full(e: BaseException | None) -> bool:
+    """Did this fail because a drive ran out of space - here or underneath?
+
+    The OSError is often wrapped (a zip that could not be written comes up
+    as something else), so the chain it was raised from is followed too.
+    """
+    seen = 0
+    while e is not None and seen < 8:
+        if isinstance(e, OSError) and (
+                e.errno == _FULL_ERRNO
+                or getattr(e, "winerror", None) in _FULL_WINERROR):
+            return True
+        e = e.__cause__ or e.__context__
+        seen += 1
+    return False
+
+
+def _drive_of(p) -> str:
+    try:
+        return Path(p).drive or Path(os.path.abspath(p)).drive
+    except (OSError, ValueError, TypeError):
+        return ""
+
+
+def _free_on(drive: str) -> str:
+    try:
+        return human(shutil.disk_usage(drive + "\\").free) + " free"
+    except OSError:
+        return "free space unknown"
+
+
+def disk_full_message(e: BaseException, game_dir=None, cache_dir=None) -> str:
+    """What to tell someone whose drive is full: which drive, how much is free.
+
+    #148's drive was full, and the report carried a Python traceback where
+    "free up space" belonged. The drive named as full is the one the failed
+    write was on; the game's drive and the cache's are listed for what they
+    are, not as full as well.
+    """
+    full = ""
+    cur: BaseException | None = e
+    while cur is not None and not full:
+        name = getattr(cur, "filename", None)
+        if name:
+            full = _drive_of(str(name))
+        cur = cur.__cause__ or cur.__context__
+    head = (f"Out of disk space on {full} ({_free_on(full)})." if full
+            else "A drive ran out of space.")
+    g, c = _drive_of(game_dir) if game_dir else "", _drive_of(cache_dir) if cache_dir else ""
+    where = []
+    if g:
+        where.append(f"beside the game ({g}, {_free_on(g)})")
+    if c:
+        where.append(f"in the tool's download cache (%LOCALAPPDATA%\\dlss5-autopilot, "
+                     f"{c}, {_free_on(c)})")
+    need = " and ".join(where) if where else "beside the game and in the tool's cache"
+    return (f"{head} The install needs a few hundred MB {need} - free some "
+            f"up, then install again.")
+
+
 _SSL: ssl.SSLContext | None = None
+
+
+def _host(url: str) -> str:
+    """The host out of a URL, for a message that names what to go and check."""
+    return url.split("/")[2] if "//" in url else url
 
 
 def untrusted(name: str, e: Exception) -> RuntimeError | None:
@@ -46,12 +121,49 @@ def untrusted(name: str, e: Exception) -> RuntimeError | None:
 
     urlopen reports a failed verification as a URLError whose reason is
     the SSLError, so the text is checked rather than the type.
+
+    One OpenSSL error code, four different faults - and the instruction for
+    one is useless for the others. #175 arrived as "Hostname mismatch,
+    certificate is not valid for 'api.github.com'" and was answered with
+    "open github.com in Edge so Windows fetches the missing root", which
+    could not have helped: the chain verified, the name on it did not
+    match, so something on that network answered for GitHub. The reason
+    text decides the answer.
     """
-    if "CERTIFICATE_VERIFY_FAILED" not in str(e):
+    text = str(e)
+    if "CERTIFICATE_VERIFY_FAILED" not in text:
         return None
+    host = name.split("/")[0] or name
+    low = text.lower()
+    if "hostname mismatch" in low or "certificate is not valid for" in low:
+        return RuntimeError(
+            f"{host}: something on this network answered for {host} with a "
+            f"certificate issued to a different name ({e}). The certificate "
+            f"was trusted - it is the name on it that is wrong, so this is "
+            f"not a missing Windows root and opening the site in Edge does "
+            f"not fix it: the connection did not reach {host} at all. The "
+            f"usual causes, in order - a DNS or family-filter service, an "
+            f"ISP or router block page, a hotel/campus wifi login page, or a "
+            f"VPN. Try a phone hotspot or set this PC's DNS to 1.1.1.1, then "
+            f"install again.")
+    if "certificate has expired" in low or "not yet valid" in low:
+        return RuntimeError(
+            f"{host}: the certificate is outside its dates as far as this PC "
+            f"is concerned ({e}). That is almost always the PC's own clock: "
+            f"check the date and time in Windows settings (turn 'Set time "
+            f"automatically' on), then install again. A wrong date makes "
+            f"every HTTPS site untrusted, not only this one.")
+    if "self signed" in low or "self-signed" in low:
+        return RuntimeError(
+            f"{host}: the certificate offered for {host} was signed by "
+            f"something on this PC rather than by a public authority ({e}). "
+            f"That is an antivirus, a VPN or a company proxy inspecting "
+            f"HTTPS, and its root is not one Windows trusts here. Exclude "
+            f"this tool from the HTTPS/SSL scanning (or turn it off), then "
+            f"install again.")
     return RuntimeError(
-        f"{name}: Windows does not trust GitHub's certificate ({e}). Open "
-        f"https://github.com once in Edge (Windows fetches a missing root "
+        f"{host}: Windows does not trust the certificate for {host} ({e}). "
+        f"Open https://{host} once in Edge (Windows fetches a missing root "
         f"certificate the first time a Microsoft program needs it), then "
         f"try again. An antivirus that inspects HTTPS causes this too - "
         f"exclude this tool or turn that off.")
@@ -228,21 +340,29 @@ def download(url: str, name: str, progress=None, force: bool = False,
             last = e
             if attempt == attempts - 1:
                 tmp.unlink(missing_ok=True)
-                if untrusted(name, e):
-                    raise untrusted(name, e) from e
+                # The host, not the file name: untrusted() names what to
+                # open in a browser and what answered for it, and "open
+                # https://renodx-4.55.zip" is not an instruction.
+                if untrusted(_host(url), e):
+                    raise untrusted(_host(url), e) from e
                 raise RuntimeError(
                     f"{name}: the secure connection kept breaking ({e}). "
-                    f"Something is sitting between this PC and GitHub - an "
+                    f"Something is sitting between this PC and {_host(url)} - an "
                     f"antivirus with HTTPS/SSL scanning, a VPN or a proxy. "
                     f"Turn that off (or exclude this tool) and try again; the "
                     f"download resumes where it stopped.") from e
             time.sleep(1.5 * (attempt + 1))
         except Exception as e:                   # network hiccup - retry
+            if is_disk_full(e):
+                # Asking again fills the same drive again; the partial file
+                # goes, so the space it took comes back (#148).
+                tmp.unlink(missing_ok=True)
+                raise
             last = e
             if attempt == attempts - 1:
                 tmp.unlink(missing_ok=True)
-                if untrusted(name, e):
-                    raise untrusted(name, e) from e
+                if untrusted(_host(url), e):
+                    raise untrusted(_host(url), e) from e
                 raise
             time.sleep(1.0 * (attempt + 1))
     raise last if last else RuntimeError(f"{name}: download failed")
@@ -377,9 +497,40 @@ def fetch_text(url: str, _try: int = 0) -> bytes:
         raise
 
 
+# Said once, wherever the answer came off github.com's pages instead of
+# the API - sources.json_or_html sets the same line for the components it
+# resolves, and the installer prints whichever is set.
+_HTML_FALLBACK = ("GitHub's API could not be reached; this release was read "
+                  "from github.com's release pages instead.")
+
+
 def json_get(url: str):
-    """Read JSON from a URL."""
-    return json.loads(fetch_text(url).decode("utf8"))
+    """Read JSON from a URL, with github.com behind api.github.com.
+
+    Every component that is not in sources.py reaches GitHub through here,
+    and the API is the one host that fails on its own - 60 anonymous calls
+    an hour, and the name a filter or an inspecting antivirus catches
+    (#175). When the request fails for a reason that is about reaching the
+    host rather than about the answer, the same release information is read
+    off github.com's pages in the API's own shape, so the caller's asset
+    matching is unchanged. A 404 or a 401 IS the answer and is raised.
+    """
+    try:
+        return json.loads(fetch_text(url).decode("utf8"))
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 404, 410):
+            raise
+        data = sources.release_json_html(url)
+        if data is None:
+            raise
+        sources.last_fallback = _HTML_FALLBACK
+        return data
+    except Exception:
+        data = sources.release_json_html(url)
+        if data is None:
+            raise
+        sources.last_fallback = _HTML_FALLBACK
+        return data
 
 
 def human(n: float) -> str:

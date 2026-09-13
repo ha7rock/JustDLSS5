@@ -71,7 +71,8 @@ def cli(target: Path, remove: bool, check: bool, route: str = "",
     need = installer.wants_dxvk(g)
     use_dxvk = bool(need) if dxvk is None else dxvk
     card, sm = gpu.detect()
-    sup = dlss.detect(g.install_dir, g.folder, g.api, g.bitness or 0, sm)
+    sup = dlss.detect(g.install_dir, g.folder, g.api, g.bitness or 0, sm,
+                      driver=gpu.driver_version())
     level, why_rel = installer.reliability(g, sup.recommended)
     print(f"game    : {g.name}")
     if card:
@@ -95,6 +96,11 @@ def cli(target: Path, remove: bool, check: bool, route: str = "",
                   f"(options: {', '.join(sup.options)})", file=sys.stderr)
             return 1
         sup.recommended = route
+        # An explicit --route is the answer; the reason and the outlook
+        # belong to the recommendation it just overrode - printing either
+        # would describe a route this run is not taking.
+        sup.reason = ""
+        level, why_rel = installer.reliability(g, sup.recommended)
     if card:
         # The same warning the install page shows, for the route that will
         # actually be installed. A command-line install on a driver that
@@ -115,7 +121,8 @@ def cli(target: Path, remove: bool, check: bool, route: str = "",
     elif sup.upscaler:
         print(f"          this game ships {dlss.UPSCALER_NAMES[sup.upscaler]} "
               f"and no DLSS ({', '.join(sup.upscaler_evidence[:3])})")
-    print(f"          {sup.reason}")
+    if sup.reason:
+        print(f"          {sup.reason}")
     print(f"outlook : {level} - {why_rel}")
     if use_dxvk:
         print(f"dxvk    : yes - {need + ' closes itself when ReShade hooks it; ' if need else ''}"

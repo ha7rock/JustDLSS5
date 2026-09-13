@@ -54,6 +54,38 @@ class FakeService:
 
 
 class DesktopTests(unittest.TestCase):
+    def test_full_scan_action_uses_shared_busy_feedback(self):
+        gate = threading.Event()
+        def scan(emit, full=False):
+            gate.wait(2)
+            self.assertTrue(full)
+            return self.service.entries
+        with patch.object(self.service, "scan", side_effect=scan) as worker:
+            try:
+                self.window.full_scan_action.trigger()
+                self.assertFalse(self.window.scan_options.isEnabled())
+                self.assertFalse(self.window.empty_scan_button.isEnabled())
+                self.assertTrue(self.window.scan_button._loading_timer.isActive())
+            finally:
+                gate.set()
+            self.drain()
+            worker.assert_called_once()
+        self.assertTrue(self.window.scan_options.isEnabled())
+
+    def test_protected_game_requires_architecture_before_install(self):
+        item = self.service.entries[0]
+        item.game.exe_warning = "Protected executable"
+        item.game.bitness = None
+        self.window._scanned([item])
+        self.window.table.selectRow(0)
+        self.drain()
+        self.assertTrue(self.window.arch_combo.isEnabled())
+        self.assertFalse(self.window.install_button.isEnabled())
+        self.assertIn("32/64", self.window.engine_warning.text())
+        item.game.bitness = 64
+        self.window._inspected(self.service.inspect(item), self.window.selection_generation)
+        self.assertTrue(self.window.install_button.isEnabled())
+
     def test_diagnostic_groups_localization_copy_and_narrow_layout(self):
         from core.diagnose import Finding
         from frontend.session import SessionResult
