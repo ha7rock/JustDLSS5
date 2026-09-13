@@ -131,7 +131,10 @@ class UpstreamTests(unittest.TestCase):
         with patch.object(diagnose, "analyse", return_value=report), \
              patch.object(wincrash, "last_crash", return_value=crash):
             result = analyse(LibraryEntry(self.game, True))
-            self.assertTrue(result.related_crash)
+            from frontend.session import current_crash
+            self.assertTrue(result.related_crash, {"current": current_crash(crash, self.folder),
+                "module": str(Path(crash.module).resolve()), "folder": str(self.folder.resolve()),
+                "files": [p.name for p in self.folder.iterdir()], "when": crash.when})
             self.assertIn("Windows recorded a crash", result.verdict)
             self.assertEqual(result.findings, [])
             crash.module = str(self.root / "game-other" / "game.exe")
