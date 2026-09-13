@@ -1,7 +1,7 @@
 """Session diagnostics and explicit tuning actions, executed by desktop workers."""
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import PureWindowsPath
+from pathlib import Path, PureWindowsPath
 
 from .backend import autotune, diagnose, dlss, feedcfg, installer, optiscaler, wincrash
 
@@ -54,7 +54,11 @@ def analyse(entry, target=0):
     crash = wincrash.last_crash(game.exe.name, since=diagnose._installed_at(folder) or 0) if game.exe else None
     related = current_crash(crash, folder)
     if related and getattr(report, "never_ran", False) and ("/" in crash.module or "\\" in crash.module):
-        related = PureWindowsPath(crash.module).is_relative_to(PureWindowsPath(str(folder.resolve())))
+        try:
+            module = Path(crash.module).resolve()
+            related = PureWindowsPath(str(module)).is_relative_to(PureWindowsPath(str(folder.resolve())))
+        except OSError:
+            related = False
     verdict = report.verdict
     if related and verdict.startswith("Working"):
         verdict = "模型曾运行，但 Windows 记录了游戏崩溃。 / The model ran, but Windows recorded a game crash."
