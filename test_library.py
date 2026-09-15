@@ -10,12 +10,30 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from core import prefs, games
-from frontend.covers import exact_match, steam_id, load_cover
+from frontend.covers import exact_match, steam_id, load_cover, search_id
 from frontend.desktop import MainWindow
 from test_ui import FakeService, entry
 
 
 class ArtworkTests(unittest.TestCase):
+    def test_chinese_search_and_folder_alias(self):
+        import json
+        game = games.Game("未知显示名", Path("Control"))
+        results = [{"items": []}, {"items": []}, {"items": [{"id": 870780, "name": "Control™"}]}]
+        with patch("frontend.covers.fetch", side_effect=[json.dumps(r).encode() for r in results]) as fetch:
+            self.assertEqual(search_id(game), "870780")
+            self.assertIn("l=schinese", fetch.call_args_list[1].args[0])
+
+    def test_local_poster_works_without_a_store_id_or_network(self):
+        with tempfile.TemporaryDirectory() as temp:
+            image = QImage(600, 900, QImage.Format.Format_RGB32)
+            image.fill(QColor("#123456"))
+            image.save(str(Path(temp) / "poster.png"))
+            with patch("frontend.covers.fetch") as fetch:
+                result = load_cover(games.Game("Test", Path(temp)), network=False, cache=Path(temp) / "cache")
+                self.assertFalse(result.isNull())
+                fetch.assert_not_called()
+
     def test_match_never_confuses_sequels_or_ambiguous_titles(self):
         rows = [{"id": 1, "name": "Star Control"}, {"id": 2, "name": "Control 2"}]
         self.assertIsNone(exact_match(rows, "Control"))

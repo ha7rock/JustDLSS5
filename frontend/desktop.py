@@ -144,6 +144,7 @@ class MainWindow(QMainWindow):
         if not isinstance(self.model.metadata, dict):
             self.model.metadata = {}
         self.cover_loader = CoverLoader(self, network=background)
+        self.cover_retries = set()
         self.cover_loader.ready.connect(self._cover_ready)
         self.current = None
         self.inspection = None
@@ -702,7 +703,7 @@ class MainWindow(QMainWindow):
         if self.library_views.currentIndex() != 0:
             return
         columns = max(1, self.grid.viewport().width() // max(1, self.grid.gridSize().width()))
-        start = (self.grid.verticalScrollBar().value() // 276) * columns
+        start = (self.grid.verticalScrollBar().value() // max(1, self.grid.gridSize().height())) * columns
         for i in range(start, min(start + 40, self.proxy.rowCount())):
             entry = self.proxy.index(i, 0).data(Qt.ItemDataRole.UserRole)
             custom = self.model.metadata.get(entry.key, {}).get("cover", "")
@@ -710,14 +711,18 @@ class MainWindow(QMainWindow):
 
     def _cover_ready(self, key, result):
         custom, image = result
+        retried = key in self.cover_retries
+        self.cover_retries.discard(key)
         if custom != self.model.metadata.get(key, {}).get("cover", ""):
             return
         if image.isNull():
             if custom:
                 self.status.setText(self.t("封面无法读取，请选择有效的图片。", "Could not read the cover. Choose a valid image."))
+            elif retried:
+                self.status.setText(self.t("未能获取封面，可稍后重试或右键选择本地图片。", "Cover unavailable. Retry later or choose a local image from the context menu."))
             return
         self.model.covers[key] = QPixmap.fromImage(image)
-        if custom:
+        if custom or retried:
             self.status.setText(self.t("封面已更新", "Cover updated"))
         for i, entry in enumerate(self.model.entries):
             if entry.key == key:
@@ -735,6 +740,8 @@ class MainWindow(QMainWindow):
         cover = menu.addAction(self.t("选择封面…", "Choose cover…"))
         reset = menu.addAction(self.t("恢复自动封面", "Use automatic cover"))
         reset.setEnabled(bool(meta.get("cover")))
+        retry = menu.addAction(self.t("重新获取封面", "Retry cover download"))
+        retry.setEnabled(not meta.get("cover") and entry.key not in self.model.covers)
         folder = menu.addAction(self.t("打开游戏文件夹", "Open game folder"))
         action = menu.exec(view.viewport().mapToGlobal(point))
         if action == favorite:
@@ -754,6 +761,10 @@ class MainWindow(QMainWindow):
             self.model.covers.pop(entry.key, None)
             self.cover_loader.requested.discard((entry.key, ""))
             self.cover_loader.request(entry)
+        elif action == retry:
+            self.cover_retries.add(entry.key)
+            self.status.setText(self.t("正在查找封面…", "Looking for a cover…"))
+            self.cover_loader.request(entry, retry=True)
         elif action == folder:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(entry.game.folder)))
         prefs.set_("studio_library_metadata", self.model.metadata)

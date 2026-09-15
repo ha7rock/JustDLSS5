@@ -137,8 +137,8 @@ class CoverDelegate(QStyledItemDelegate):
         cover = model.covers.get(entry.key)
         if cover and not cover.isNull():
             painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-            # Preserve the complete cover; never stretch or crop its title.
-            fitted = cover.size().scaled(art.size(), Qt.AspectRatioMode.KeepAspectRatio)
+            # Fill the clipped frame with a centered crop, without distortion.
+            fitted = cover.size().scaled(art.size(), Qt.AspectRatioMode.KeepAspectRatioByExpanding)
             dest = art.adjusted(0, 0, 0, 0)
             dest.setSize(fitted)
             dest.moveCenter(art.center())
@@ -191,14 +191,16 @@ class CoverView(QListView):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollMode(QListView.ScrollMode.ScrollPerPixel)
         self.setItemDelegate(CoverDelegate(self))
-        self.setGridSize(QSize(172, 276))
+        self.setGridSize(QSize(172, 307))
         self.setStyleSheet("QListView { background: transparent; border: none; }")
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         width = max(1, self.viewport().width())
         columns = max(1, width // 172)
-        self.setGridSize(QSize(max(1, width // columns), 276))
+        cell_width = max(1, width // columns)
+        # Match Steam's 2:3 posters so normal covers do not lose their title.
+        self.setGridSize(QSize(cell_width, round(max(1, cell_width - 26) * 1.5) + 88))
 
 
 class RowDelegate(QStyledItemDelegate):

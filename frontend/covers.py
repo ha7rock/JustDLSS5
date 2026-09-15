@@ -22,6 +22,7 @@ from PySide6.QtGui import QImage, QImageReader
 
 
 def normalized(title):
+    title = title.replace("™", "").replace("®", "").replace("©", "")
     return "".join(c for c in unicodedata.normalize("NFKC", title).casefold() if c.isalnum())
 
 
@@ -72,26 +73,80 @@ def read_image(path):
     return image.scaled(400, 600, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
 
 
+def cache_directory():
+    return Path(os.environ.get("LOCALAPPDATA", Path.home())) / "JustDLSS5" / "covers"
+
+
+def cache_key(game):
+    return hashlib.sha256(str(game.folder).casefold().encode()).hexdigest()
+
+
+def local_artwork(game, appid):
+    """Use explicit artwork filenames only; never pick arbitrary screenshots."""
+    folder = Path(game.folder)
+    for stem in ("poster", "cover", "library_600x900"):
+        for suffix in (".jpg", ".png", ".webp"):
+            yield folder / (stem + suffix)
+    if not appid:
+        return
+    roots = {p.parent for p in folder.parents if p.name.casefold() == "steamapps"}
+    if os.name == "nt":
+        import winreg
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam") as key:
+                roots.add(Path(winreg.QueryValueEx(key, "SteamPath")[0]))
+        except OSError:
+            pass
+    for root in roots:
+        cache = root / "appcache/librarycache"
+        for suffix in ("jpg", "png", "webp"):
+            yield cache / f"{appid}_library_600x900.{suffix}"
+            yield cache / appid / f"library_600x900.{suffix}"
+
+
+def search_id(game):
+    names = [game.name]
+    folder_name = Path(game.folder).name
+    if normalized(folder_name) != normalized(game.name):
+        names.append(folder_name)
+    for name in names:
+        if len(normalized(name)) < 3:
+            continue
+        for language in ("english", "schinese"):
+            try:
+                data = json.loads(fetch("https://store.steampowered.com/api/storesearch/?" +
+                                        urlencode({"term": name, "cc": "us", "l": language}), 1_000_000))
+                appid = exact_match(data.get("items", []), name)
+                if appid:
+                    return appid
+            except (OSError, ValueError):
+                continue
+    return None
+
+
 def load_cover(game, custom="", network=True, cache=None):
     if custom:
         return read_image(custom)
-    cache = cache or Path(os.environ.get("LOCALAPPDATA", Path.home())) / "JustDLSS5" / "covers"
-    key = hashlib.sha256(str(game.folder).casefold().encode()).hexdigest()
+    cache = cache or cache_directory()
+    key = cache_key(game)
     target = cache / (key + ".jpg")
     if target.is_file():
         image = read_image(target)
         if not image.isNull():
             return image
+    appid = steam_id(game)
+    for path in local_artwork(game, appid):
+        if path.is_file():
+            image = read_image(path)
+            if not image.isNull():
+                return image
     if not network:
         return QImage()
-    miss = cache / (key + ".missing")
+    miss = cache / (key + ".missing-v2")
     if miss.exists() and time.time() - miss.stat().st_mtime < 86400:
         return QImage()
-    appid = steam_id(game)
     if not appid:
-        data = json.loads(fetch("https://store.steampowered.com/api/storesearch/?" +
-                                urlencode({"term": game.name, "cc": "us", "l": "en"}), 1_000_000))
-        appid = exact_match(data.get("items", []), game.name)
+        appid = search_id(game)
     cache.mkdir(parents=True, exist_ok=True)
     if appid:
         for name in ("library_600x900.jpg", "header.jpg"):
@@ -120,20 +175,26 @@ class CoverLoader(QObject):
         self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="covers")
         self.queue = queue.Queue()
         self.requested = set()
+        self.pending = set()
         self.timer = QTimer(self)
         self.timer.setInterval(80)
         self.timer.timeout.connect(self.drain)
         self.timer.start()
 
-    def request(self, entry, custom=""):
+    def request(self, entry, custom="", retry=False):
         if self.closed:
             return
         token = (entry.key, custom)
-        if token in self.requested:
+        if token in self.pending:
+            return
+        if token in self.requested and not retry:
             return
         self.requested.add(token)
+        self.pending.add(token)
         def work():
             try:
+                if retry:
+                    (cache_directory() / (cache_key(entry.game) + ".missing-v2")).unlink(missing_ok=True)
                 image = load_cover(entry.game, custom, self.network)
             except Exception:
                 image = QImage()
@@ -146,6 +207,7 @@ class CoverLoader(QObject):
                 key, custom, image = self.queue.get_nowait()
             except queue.Empty:
                 break
+            self.pending.discard((key, custom))
             self.ready.emit(key, (custom, image))
 
     def shutdown(self):
