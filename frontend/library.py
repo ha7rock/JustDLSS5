@@ -1,8 +1,8 @@
 """Memory-only Qt model. Painting, filtering and resizing never touch disk."""
 from .icons import usable_image
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QSortFilterProxyModel
-from PySide6.QtGui import QColor, QIcon, QPixmap, QPalette
-from PySide6.QtWidgets import QTableView, QStyledItemDelegate, QStyle, QApplication
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QSortFilterProxyModel, QSize, QRectF
+from PySide6.QtGui import QColor, QIcon, QPixmap, QPalette, QPainter, QPainterPath, QFont
+from PySide6.QtWidgets import QTableView, QStyledItemDelegate, QStyle, QApplication, QListView
 
 
 class LibraryModel(QAbstractTableModel):
@@ -11,6 +11,8 @@ class LibraryModel(QAbstractTableModel):
         self.entries = []
         self.chinese = True
         self.icons = {}
+        self.covers = {}
+        self.metadata = {}
 
     def replace(self, entries):
         self.beginResetModel()
@@ -64,13 +66,18 @@ class LibraryFilter(QSortFilterProxyModel):
         self.terms = []
         self.only_installed = False
         self.arch = 0
+        self.status = 0
+        self.source = ""
+        self.order = "name"
         self.setSortCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
 
-    def set_query(self, query, installed=False, arch=0):
+    def set_query(self, query, installed=False, arch=0, status=0, source=""):
         self.beginFilterChange()
         self.terms = query.casefold().split()
         self.only_installed = installed
         self.arch = arch
+        self.status = status
+        self.source = source
         self.endFilterChange(QSortFilterProxyModel.Direction.Rows)
 
     def filterAcceptsRow(self, row, parent):
@@ -79,7 +86,119 @@ class LibraryFilter(QSortFilterProxyModel):
         haystack = f"{game.name} {game.source} {game.folder}".casefold()
         return (all(term in haystack for term in self.terms)
                 and (not self.only_installed or entry.installed)
-                and (not self.arch or game.bitness in (None, self.arch)))
+                and (not self.arch or game.bitness in (None, self.arch))
+                and (not self.source or game.source == self.source)
+                and (self.status != 2 or not entry.installed)
+                and (self.status != 3 or bool(entry.anticheat or game.error))
+                and (self.status != 4 or self.sourceModel().metadata.get(entry.key, {}).get("favorite", False)))
+
+
+    def lessThan(self, left, right):
+        model = self.sourceModel()
+        a, b = model.entries[left.row()], model.entries[right.row()]
+        ma, mb = model.metadata.get(a.key, {}), model.metadata.get(b.key, {})
+        def key(entry, meta):
+            favorite = not meta.get("favorite", False)
+            if self.order == "added":
+                value = -meta.get("added", 0)
+            elif self.order == "recent":
+                value = -meta.get("recent", 0)
+            elif self.order == "source":
+                value = entry.game.source.casefold()
+            else:
+                value = entry.game.name.casefold()
+            return favorite, value, entry.game.name.casefold(), entry.key
+        return key(a, ma) < key(b, mb)
+
+
+class CoverDelegate(QStyledItemDelegate):
+    def sizeHint(self, option, index):
+        return self.parent().gridSize()
+
+    def paint(self, painter, option, index):
+        entry = index.data(Qt.ItemDataRole.UserRole)
+        if not entry:
+            return
+        model = index.model().sourceModel()
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = option.rect.adjusted(5, 5, -5, -5)
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        hover = bool(option.state & QStyle.StateFlag.State_MouseOver)
+        painter.setPen(QColor("#b6e477" if selected else "#64764c" if hover else "#323b47"))
+        painter.setBrush(QColor("#2b3529" if selected else "#29313b" if hover else "#20262f"))
+        painter.drawRoundedRect(QRectF(rect), 10, 10)
+        art = rect.adjusted(8, 8, -8, -70)
+        clip = QPainterPath()
+        clip.addRoundedRect(QRectF(art), 6, 6)
+        painter.save()
+        painter.setClipPath(clip)
+        painter.fillRect(art, QColor("#151b23"))
+        cover = model.covers.get(entry.key)
+        if cover and not cover.isNull():
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            # Preserve the complete cover; never stretch or crop its title.
+            fitted = cover.size().scaled(art.size(), Qt.AspectRatioMode.KeepAspectRatio)
+            dest = art.adjusted(0, 0, 0, 0)
+            dest.setSize(fitted)
+            dest.moveCenter(art.center())
+            painter.drawPixmap(dest, cover)
+        else:
+            icon = model.icons.get(entry.key)
+            if icon:
+                icon.paint(painter, art.center().x()-24, art.center().y()-24, 48, 48)
+        painter.restore()
+        favorite = model.metadata.get(entry.key, {}).get("favorite", False)
+        title = ("★ " if favorite else "") + entry.game.name
+        font = QFont(option.font)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QColor("#f1a7a2" if entry.anticheat else "#e5e9ef"))
+        title_rect = rect.adjusted(10, rect.height()-65, -10, -40)
+        painter.drawText(title_rect, Qt.AlignmentFlag.AlignVCenter,
+                         painter.fontMetrics().elidedText(title, Qt.TextElideMode.ElideRight, title_rect.width()))
+        font.setBold(False)
+        painter.setFont(font)
+        painter.setPen(QColor("#9ba8b7"))
+        source_rect = rect.adjusted(10, rect.height()-41, -10, -22)
+        painter.drawText(source_rect, Qt.AlignmentFlag.AlignVCenter, entry.game.source)
+        zh = model.chinese
+        status = ("已安装增强" if zh else "Components installed") if entry.installed else ("未安装增强" if zh else "No components")
+        if entry.anticheat:
+            status = "反作弊风险" if zh else "Anti-cheat risk"
+        elif entry.game.error:
+            status = "需要检查" if zh else "Needs attention"
+        painter.setPen(QColor("#f1a7a2" if entry.anticheat or entry.game.error else "#b6e477" if entry.installed else "#9ba8b7"))
+        status_rect = rect.adjusted(10, rect.height()-22, -10, -4)
+        painter.drawText(status_rect, Qt.AlignmentFlag.AlignVCenter,
+                         painter.fontMetrics().elidedText(status, Qt.TextElideMode.ElideRight, status_rect.width()))
+        painter.restore()
+
+
+class CoverView(QListView):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setViewMode(QListView.ViewMode.IconMode)
+        self.setResizeMode(QListView.ResizeMode.Adjust)
+        self.setMovement(QListView.Movement.Static)
+        self.setWrapping(True)
+        self.setUniformItemSizes(True)
+        self.setLayoutMode(QListView.LayoutMode.Batched)
+        self.setBatchSize(60)
+        self.setMouseTracking(True)
+        self.setSelectionMode(QListView.SelectionMode.SingleSelection)
+        self.setEditTriggers(QListView.EditTrigger.NoEditTriggers)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollMode(QListView.ScrollMode.ScrollPerPixel)
+        self.setItemDelegate(CoverDelegate(self))
+        self.setGridSize(QSize(172, 276))
+        self.setStyleSheet("QListView { background: transparent; border: none; }")
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        width = max(1, self.viewport().width())
+        columns = max(1, width // 172)
+        self.setGridSize(QSize(max(1, width // columns), 276))
 
 
 class RowDelegate(QStyledItemDelegate):
