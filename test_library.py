@@ -174,6 +174,26 @@ class LibraryTests(unittest.TestCase):
         self.assertIsNone(w.current)
         self.assertFalse(w.detail_stack.isVisible())
 
+    def test_detail_navigation_is_explicit_and_returns_to_same_library(self):
+        w = self.window
+        index = w.proxy.index(0, 0)
+        w.grid.setCurrentIndex(index)
+        self.drain()
+        self.assertEqual(w.library_navigation.currentIndex(), 0)
+        w._open_game(index)
+        self.assertEqual(w.library_navigation.currentIndex(), 1)
+        self.assertFalse(w.grid.isVisible())
+        w.back_to_library_button.click()
+        self.assertEqual(w.library_navigation.currentIndex(), 0)
+        self.assertEqual(w.grid.currentIndex(), index)
+        w._open_game(index)
+        QTest.keyClick(w.back_to_library_button, Qt.Key.Key_Escape)
+        self.app.processEvents()
+        self.assertEqual(w.library_navigation.currentIndex(), 0)
+        w._open_game(index)
+        w.navigate(0)
+        self.assertEqual(w.library_navigation.currentIndex(), 0)
+
     def test_narrow_grid_and_language(self):
         w = self.window
         for language in (0, 1):

@@ -334,9 +334,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(browsing)
         self.count_label = label("", "eyebrow")
         layout.addWidget(self.count_label)
-        self.library_split = QSplitter(Qt.Orientation.Horizontal)
-        self.library_split.setChildrenCollapsible(False)
-        self.library_split.setHandleWidth(16)
+        self.library_navigation = QStackedWidget()
         self.library_state = QStackedWidget()
         self.table = LibraryTable()
         self.table.setIconSize(QSize(32, 32))
@@ -367,7 +365,8 @@ class MainWindow(QMainWindow):
         self.library_views.addWidget(self.table)
         self.library_state.addWidget(self.library_views)
         for view in (self.grid, self.table):
-            view.clicked.connect(lambda index: self.detail_stack.show() if index.isValid() else None)
+            view.clicked.connect(self._open_game)
+            view.activated.connect(self._open_game)
             view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             view.customContextMenuRequested.connect(lambda point, v=view: self._library_menu(v, point))
         self.grid.verticalScrollBar().valueChanged.connect(self._request_covers)
@@ -395,10 +394,9 @@ class MainWindow(QMainWindow):
         empty_layout.addWidget(self.empty_scan_button, alignment=Qt.AlignmentFlag.AlignHCenter)
         empty_layout.addStretch()
         self.library_state.addWidget(empty)
-        self.library_split.addWidget(self.library_state)
+        layout.addWidget(self.library_state, 1)
         self.detail_stack = QStackedWidget()
         self.detail_stack.setMinimumWidth(310)
-        self.detail_stack.setMaximumWidth(470)
         self.detail_stack.setObjectName("detail")
         intro = QWidget()
         intro_layout = column(intro, 24, 14)
@@ -415,17 +413,37 @@ class MainWindow(QMainWindow):
         intro_layout.addWidget(label(self.t("仅用于离线游戏。反作弊系统可能拦截 ReShade 插件。", "For offline games. Anti-cheat may flag ReShade add-ons."), "notice", True))
         self.detail_stack.addWidget(intro)
         self.detail_stack.addWidget(self._detail_panel())
-        self.library_split.addWidget(self.detail_stack)
-        self.library_split.setSizes([860, 350])
-        self.detail_stack.hide()
-        layout.addWidget(self.library_split, 1)
-        return page
+        self.library_navigation.addWidget(page)
+        self.library_navigation.addWidget(self.detail_stack)
+        back_shortcut = QShortcut(QKeySequence("Escape"), self.detail_stack)
+        back_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        back_shortcut.activated.connect(self._back_to_library)
+        return self.library_navigation
+
+    def _open_game(self, index):
+        if not index.isValid():
+            return
+        self.table.setCurrentIndex(index)
+        entry = index.data(Qt.ItemDataRole.UserRole)
+        if not self.current or self.current.key != entry.key:
+            self._select(index, self.table.currentIndex())
+        self.detail_stack.setCurrentIndex(1)
+        self.library_navigation.setCurrentIndex(1)
+        self.back_to_library_button.setFocus()
+
+    def _back_to_library(self):
+        was_open = self.library_navigation.currentIndex() == 1
+        self.library_navigation.setCurrentIndex(0)
+        if was_open:
+            self.library_views.currentWidget().setFocus()
+        self._request_covers()
 
     def _detail_panel(self):
         panel = QWidget()
         outer = column(panel, 0, 0)
-        close_detail = button(self.t("收起详情", "Close details"), self.detail_stack.hide)
-        outer.addWidget(close_detail)
+        self.back_to_library_button = button(self.t("← 返回游戏库", "← Back to library"), self._back_to_library, "ghost")
+        self.back_to_library_button.setToolTip(self.t("返回游戏库（Esc）", "Back to library (Esc)"))
+        outer.addWidget(self.back_to_library_button, alignment=Qt.AlignmentFlag.AlignLeft)
         content = QWidget()
         layout = column(content, 20, 10)
         layout.addWidget(label(self.t("游戏设置", "GAME SETUP"), "eyebrow"))
@@ -613,6 +631,8 @@ class MainWindow(QMainWindow):
 
     def navigate(self, index):
         self.pages.setCurrentIndex(index)
+        if index == 0:
+            self._back_to_library()
         for i, btn in enumerate(self.nav_buttons):
             btn.setChecked(i == index)
 
@@ -659,7 +679,7 @@ class MainWindow(QMainWindow):
             self.inspection = None
             self.selection_generation += 1
             self.detail_stack.setCurrentIndex(0)
-            self.detail_stack.hide()
+            self._back_to_library()
 
     def _remember_entries(self, entries):
         now = time.time()
@@ -853,7 +873,9 @@ class MainWindow(QMainWindow):
         self.empty_scan_button.setEnabled(not busy)
         self.add_button.setEnabled(not busy)
         self.language.setEnabled(not self.jobs.active)
-        self.detail_stack.widget(1).setEnabled(not busy)
+        for widget in self.detail_stack.widget(1).findChildren(QWidget, options=Qt.FindChildOption.FindDirectChildrenOnly):
+            if widget is not self.back_to_library_button:
+                widget.setEnabled(not busy)
         self.install_button.setEnabled(not busy and self._detail_ready and self._route_usable())
 
     def _hardware(self, result):
@@ -897,7 +919,7 @@ class MainWindow(QMainWindow):
         self.inspection = None
         self.selection_generation += 1
         self.detail_stack.setCurrentIndex(0)
-        self.detail_stack.hide()
+        self._back_to_library()
         self._remember_entries(entries)
         self.model.replace(entries)
         self._filter()
@@ -931,6 +953,7 @@ class MainWindow(QMainWindow):
         for i in range(self.proxy.rowCount()):
             if self.proxy.index(i, 0).data(Qt.ItemDataRole.UserRole).key == entry.key:
                 self.table.selectRow(i)
+                self._open_game(self.proxy.index(i, 0))
                 break
 
     def _select(self, index, previous):
@@ -949,7 +972,6 @@ class MainWindow(QMainWindow):
         self.anticheat_warning.setText(self.t(f"检测到 {entry.anticheat}。插件可能被拦截、导致游戏无法启动或封禁账号。请勿用于联网模式。", f"{entry.anticheat} detected. Add-ons may be blocked, prevent launch or cause bans. Do not use online."))
         self.anticheat_warning.setVisible(bool(entry.anticheat))
         self.detail_stack.setCurrentIndex(1)
-        self.detail_stack.show()
         self.model.metadata.setdefault(entry.key, {})["recent"] = time.time()
         prefs.set_("studio_library_metadata", self.model.metadata)
         self.install_button.setEnabled(False)
@@ -1413,6 +1435,7 @@ class MainWindow(QMainWindow):
             self.language.blockSignals(False)
             return
         options = self._options() if self.inspection else None
+        detail_open = self.library_navigation.currentIndex() == 1
         selected, inspection, page = self.current, self.inspection, self.pages.currentIndex()
         self.chinese = index == 0
         prefs.set_("language", "zh_CN" if self.chinese else "en")
@@ -1420,14 +1443,23 @@ class MainWindow(QMainWindow):
         self._build()
         old.deleteLater()
         self.current, self.inspection = selected, inspection
+        if selected:
+            selection = self.table.selectionModel()
+            selection.blockSignals(True)
+            for row_index in range(self.proxy.rowCount()):
+                if self.proxy.index(row_index, 0).data(Qt.ItemDataRole.UserRole).key == selected.key:
+                    self.table.selectRow(row_index)
+                    break
+            selection.blockSignals(False)
         if inspection:
-            self.detail_stack.show()
             self.game_title.setText(selected.game.name)
             self.game_path.setText(str(selected.game.folder))
             self.detail_stack.setCurrentIndex(1)
             self._inspected(inspection, self.selection_generation)
             self._apply_options(options)
         self.navigate(page)
+        if detail_open and inspection:
+            self.library_navigation.setCurrentIndex(1)
         self.activity_log.setPlainText("\n".join(self.log_lines))
 
     def _activity_page(self):

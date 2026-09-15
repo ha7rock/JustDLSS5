@@ -169,6 +169,7 @@ class DesktopTests(unittest.TestCase):
     def select_game(self, index=0):
         self.window._scanned(self.service.entries)
         self.window.table.selectRow(index)
+        self.window._open_game(self.window.proxy.index(index, 0))
         self.drain()
 
     def test_starts_in_library_without_scan_or_io(self):
@@ -239,7 +240,7 @@ class DesktopTests(unittest.TestCase):
         self.assertGreaterEqual(self.window.table.columnWidth(0), 200)
         self.window.advanced_toggle.setChecked(True)
         self.app.processEvents()
-        for widget in (self.window.install_button, self.window.scan_button, self.window.language):
+        for widget in (self.window.install_button, self.window.back_to_library_button, self.window.language):
             self.assertTrue(widget.isVisible())
             position = widget.mapTo(self.window, widget.rect().bottomRight())
             self.assertLessEqual(position.x(), self.window.width())
