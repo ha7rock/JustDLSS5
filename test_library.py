@@ -10,12 +10,37 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from core import prefs, games
-from frontend.covers import exact_match, steam_id, load_cover, search_id
+from frontend.covers import exact_match, steam_id, load_cover, search_id, clean_name, best_match, prepare_artwork
 from frontend.desktop import MainWindow
 from test_ui import FakeService, entry
 
 
 class ArtworkTests(unittest.TestCase):
+    def test_packaging_cleanup_preserves_game_identity(self):
+        self.assertEqual(clean_name("Resident_Evil_4_(Demo)_[DODI Repack]_v1.2"), "Resident Evil 4 Demo")
+        self.assertEqual(best_match([{"id": 1, "name": "Control Ultimate Edition"}], "Control [Repack]"), "1")
+        self.assertEqual(best_match([{"id": 2, "name": "Cyberpunk 2077"}], "Cyberpnuk 2077"), "2")
+        for query, candidate in [("Control", "Star Control"), ("Resident Evil 4", "Resident Evil 5"),
+                                 ("Resident Evil IV", "Resident Evil V"), ("Control Demo", "Control"),
+                                 ("Monster Hunter", "Monster Hunter Stories")]:
+            self.assertIsNone(best_match([{"id": 1, "name": candidate}], query))
+        self.assertIsNone(best_match([{"id": 1, "name": "Control"}, {"id": 2, "name": "Control Ultimate Edition"}], "Control"))
+
+    def test_landscape_keeps_both_edges_and_fills_backdrop(self):
+        image = QImage(400, 200, QImage.Format.Format_RGB32)
+        image.fill(QColor("#3478ab"))
+        for y in range(200):
+            image.setPixelColor(0, y, QColor("red"))
+            image.setPixelColor(399, y, QColor("green"))
+        prepared = prepare_artwork(image)
+        self.assertEqual((prepared.width(), prepared.height()), (400, 600))
+        self.assertEqual(prepared.pixelColor(0, 300), QColor("red"))
+        self.assertEqual(prepared.pixelColor(399, 300), QColor("green"))
+        self.assertGreater(prepared.pixelColor(200, 20).blue(), 30)
+        portrait = QImage(400, 600, QImage.Format.Format_RGB32)
+        portrait.fill(QColor("yellow"))
+        self.assertEqual(prepare_artwork(portrait), portrait)
+
     def test_chinese_search_and_folder_alias(self):
         import json
         game = games.Game("未知显示名", Path("Control"))
