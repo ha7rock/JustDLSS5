@@ -102,6 +102,18 @@ class DiagnosticDialog(QDialog):
                 body.addWidget(_label(f"{title} ({len(rows)})", "subheading"))
             body.addWidget(group)
 
+        if result.costs:
+            frame, box = self.card(self.t("渲染开销估算", "Estimated rendering cost"))
+            for cost in result.costs:
+                text = f"{cost.resolution}%  ·  {cost.model_ms:.1f} ms"
+                if cost.fps is not None:
+                    text += self.t(f"  ·  约 {cost.fps:.0f} FPS", f"  ·  about {cost.fps:.0f} FPS")
+                if cost.played:
+                    text += self.t("（本次比例）", " (session scale)")
+                box.addWidget(_label(text))
+            box.addWidget(_label(self.t("基于本机日志估算。毫秒值仅为模型开销；没有 FPS 的路线未测得游戏帧率。",
+                "Estimated from this machine's logs. Milliseconds describe model cost only; a missing FPS value means game FPS was not measured."), "muted"))
+            body.addWidget(frame)
         if result.target:
             frame, box = self.card(self.t("渲染比例建议", "Render scale suggestion"))
             box.addWidget(_label(self.t(f"目标帧率：{result.target} FPS", f"Target: {result.target} FPS")))

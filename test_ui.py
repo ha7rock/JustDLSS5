@@ -54,6 +54,33 @@ class FakeService:
 
 
 class DesktopTests(unittest.TestCase):
+    def test_context_help_hover_delay_leave_and_language(self):
+        from frontend.controls import HelpButton
+        for language, fragment in ((0, "不是锁帧"), (1, "frame limiter")):
+            self.window.change_language(language)
+            quality = next(item for item in self.window.findChildren(HelpButton)
+                           if item.property("helpKey") == "quality")
+            self.assertIn(fragment, quality.accessibleDescription())
+            self.assertEqual(quality.toolTip(), "")
+            quality.click()
+            self.assertIsNone(quality._popup)
+            quality.show()
+            with patch.object(quality, "underMouse", return_value=True), \
+                 patch.object(quality, "isVisible", return_value=True):
+                QApplication.sendEvent(quality, QEvent(QEvent.Type.Enter))
+                QTest.qWait(200)
+                self.assertIsNone(quality._popup)
+                QApplication.sendEvent(quality, QEvent(QEvent.Type.Leave))
+                self.assertFalse(quality._hover_timer.isActive())
+                QApplication.sendEvent(quality, QEvent(QEvent.Type.Enter))
+                QTest.qWait(900)
+                self.assertIsNotNone(quality._popup)
+                self.assertTrue(quality._popup.isVisible())
+                self.assertIn(fragment, quality._popup.body.text())
+                self.assertGreaterEqual(quality._popup.width(), 300)
+                QApplication.sendEvent(quality, QEvent(QEvent.Type.Leave))
+                self.assertFalse(quality._popup.isVisible())
+
     def test_full_scan_action_uses_shared_busy_feedback(self):
         gate = threading.Event()
         def scan(emit, full=False):
@@ -235,6 +262,7 @@ class DesktopTests(unittest.TestCase):
     def test_small_window_primary_actions_are_accessible(self):
         self.select_game()
         self.window.resize(900, 620)
+        QTest.qWait(100)
         self.app.processEvents()
         self.assertGreaterEqual(self.window.table.columnWidth(0), 200)
         self.window.advanced_toggle.setChecked(True)

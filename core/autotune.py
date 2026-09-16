@@ -52,8 +52,21 @@ MIN_SPREAD = 5
 # itself was never logged (the OptiScaler route logs the model's cost, not
 # the game's fps). A rule of thumb, and named as one wherever it is shown.
 BUDGET_SHARE = 0.25
+# The work areas a cost table is printed for, plus whatever this session
+# ran at. Three rows bracket the dial; twenty rows are a table nobody reads.
+SHOWN_AREAS = (50, 75, 100)
+# Two sessions this far apart may be published as a measured cost. The
+# solve itself accepts MIN_SPREAD, which is enough to print a table the
+# person can disbelieve - it is not enough to put a number in front of
+# strangers: at 5% apart, ordinary run-to-run noise solves to a model that
+# costs a fifth of a millisecond.
+SHARE_SPREAD = 15
 HISTORY_KEY = "autotune"
 MAX_SAMPLES = 8
+# How many games' histories are kept. Every diagnosis of a game on a route
+# with a work area records one now, not only the ones where a frame rate
+# was typed, and settings.json is read and written whole.
+MAX_GAMES = 60
 
 FEED_PERF = re.compile(r"(\d+) frames: feed CPU ([\d.,]+) ms/frame"
                        r"[^\n]*?([\d.,]+) fps")
@@ -70,10 +83,24 @@ class Measured:
     model_ms: float | None = None
     frames: int = 0
     source: str = ""
+    # Did the work area come from the file the add-on read, or is it the
+    # slider's value because nothing could be read? A guess is fine for a
+    # table on screen and is not fine in a published record that the next
+    # person sets their game by.
+    from_config: bool = True
 
     @property
     def frame_ms(self) -> float | None:
         return 1000.0 / self.fps if self.fps else None
+
+
+@dataclass
+class Cost:
+    """What the model costs at one work area, in this game, on this card."""
+    resolution: int
+    model_ms: float
+    fps: float | None = None
+    played: bool = False         # this row is a session, not arithmetic
 
 
 @dataclass
@@ -137,13 +164,38 @@ def measure(text_feed: str, text_opti: str, route: str,
                     source="the feed's frame-rate line")
 
 
-def ran_at(install_dir, route: str, fallback: int) -> int:
-    """The work area the session really ran at, read from the config file.
+# A config written this long after the log stopped is a config written for
+# the NEXT session, not the one that was played. A minute of slack: an
+# install writes the cfg and the game may still be flushing its log.
+CONFIG_GRACE = 60
 
-    The slider in the window is live state and a route change rewrites it,
-    so it says what the NEXT install would use, not what this session used.
-    The add-ons read these two files at startup, which makes them the only
-    honest record of it.
+
+def config_name(route: str) -> str:
+    """The file this route's add-on reads its work area from."""
+    return "OptiScaler.ini" if route == "optiscaler" else "dlss5-feed.cfg"
+
+
+def written_after(install_dir, route: str, log_path) -> bool:
+    """Was the work area written after the session it would be read for?
+
+    An install rewrites the config. Pressing "did it work?" afterwards
+    without playing again reads the NEW work area against the OLD log, and
+    what comes out of that is a frame rate attributed to a setting nobody
+    played at - then published.
+    """
+    from pathlib import Path as _P
+    try:
+        cfg = _P(install_dir) / config_name(route)
+        return cfg.stat().st_mtime > _P(log_path).stat().st_mtime + CONFIG_GRACE
+    except OSError:
+        return False
+
+
+def ran_at_exact(install_dir, route: str) -> int | None:
+    """The work area in the add-on's own config, or None if it is not there.
+
+    None means "nobody knows", which is a different answer from any number
+    - see ran_at() for why the difference matters now.
     """
     from pathlib import Path as _P
     d = _P(install_dir)
@@ -166,7 +218,20 @@ def ran_at(install_dir, route: str, fallback: int) -> int:
                 return _clamp(v)
     except (OSError, ValueError):
         pass
-    return int(fallback)
+    return None
+
+
+def ran_at(install_dir, route: str, fallback: int) -> int:
+    """The work area the session really ran at, read from the config file.
+
+    The slider in the window is live state and a route change rewrites it,
+    so it says what the NEXT install would use, not what this session used.
+    The add-ons read these two files at startup, which makes them the only
+    record of it - the fallback is the slider, and a session measured
+    against the fallback is not published (Measured.from_config).
+    """
+    got = ran_at_exact(install_dir, route)
+    return int(fallback) if got is None else got
 
 
 # ------------------------------------------------------------- the history
@@ -176,19 +241,40 @@ def _key(install_dir) -> str:
 
 def history(install_dir) -> list[dict]:
     all_ = prefs.get(HISTORY_KEY) or {}
-    rows = all_.get(_key(install_dir)) or []
-    return [r for r in rows if isinstance(r, dict)]
+    rows = all_.get(_key(install_dir))
+    return [r for r in (rows if isinstance(rows, list) else [])
+            if isinstance(r, dict)]
 
 
 def remember(install_dir, m: Measured) -> None:
-    """Keep one sample per resolution - the newest wins."""
+    """Keep one sample per resolution, per route - the newest wins.
+
+    Per route, because the two routes do not measure the same thing: the
+    feeder writes a frame rate and the OptiScaler fork writes the model's
+    own cost. A session on one used to overwrite the other's point at the
+    same work area, and the two-point solve quietly lost a leg.
+    """
     all_ = dict(prefs.get(HISTORY_KEY) or {})
     rows = [r for r in (all_.get(_key(install_dir)) or [])
-            if isinstance(r, dict) and r.get("resolution") != m.resolution]
+            if isinstance(r, dict)
+            and not (r.get("resolution") == m.resolution
+                     and (r.get("route") or m.route) == m.route)]
     rows.append({"resolution": m.resolution, "fps": m.fps,
                  "model_ms": m.model_ms, "route": m.route,
                  "at": int(time.time())})
     all_[_key(install_dir)] = rows[-MAX_SAMPLES:]
+    if len(all_) > MAX_GAMES:
+        def newest(item):
+            # item[1] is whatever is in the file under that game's key.
+            # Same file, same junk: settings.json is read back off a disk,
+            # and a raise here happens inside the diagnosis.
+            seen = [int(r["at"])
+                    for r in (item[1] if isinstance(item[1], list) else [])
+                    if isinstance(r, dict)
+                    and isinstance(r.get("at"), (int, float))
+                    and not isinstance(r.get("at"), bool)]
+            return max(seen, default=0)
+        all_ = dict(sorted(all_.items(), key=newest)[-MAX_GAMES:])
     prefs.set_(HISTORY_KEY, all_)
 
 
@@ -223,6 +309,134 @@ def _solve(points: list[tuple[int, float]]) -> tuple[float, float] | None:
     return base, k
 
 
+def split(rows: list[dict],
+          latest: Measured | None) -> tuple[float | None, float] | None:
+    """(base ms, model ms at 100%) for this game, or None.
+
+    `base` is the part of the frame the work area does not touch. It is
+    None on the routes that log the model's own cost without a frame rate:
+    the model's cost still goes with the area there, but what is left of
+    the frame was never measured, and inventing it is how a tool ends up
+    printing a frame rate nobody had.
+    """
+    if latest is None:
+        return None
+    if latest.fps:
+        return _solve(_points(rows, latest.route))
+    if latest.model_ms and latest.resolution:
+        area = (int(latest.resolution) / 100.0) ** 2
+        if area > 0:
+            return None, latest.model_ms / area
+    return None
+
+
+def _points(rows: list[dict], route: str = "") -> list[tuple[int, float]]:
+    """(work area, frame ms) per session, from what was written down.
+
+    The rows come back out of prefs.json, which is a file on a disk: a
+    hand-edited or half-written one has strings and nulls in it, and this
+    is called from the diagnosis, where a raise costs the crash correction
+    that runs after it.
+    """
+    out: dict[int, float] = {}
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        # Only this route's sessions: a frame rate measured on the feeder
+        # and one measured under OptiScaler are two different games.
+        if route and (r.get("route") or route) != route:
+            continue
+        try:
+            res, fps = int(r["resolution"]), float(r["fps"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if res and fps > 0:
+            out[res] = 1000.0 / fps
+    return sorted(out.items())
+
+
+def costs(rows: list[dict], latest: Measured | None,
+          areas=SHOWN_AREAS) -> list[Cost]:
+    """What each work area costs, from the split. Empty when there is none."""
+    got = split(rows, latest)
+    if not got or latest is None:
+        return []
+    base, k = got
+    out = []
+    for r in sorted({_clamp(x) for x in (*areas, latest.resolution)}):
+        ms = k * (r / 100.0) ** 2
+        out.append(Cost(r, ms, (1000.0 / (base + ms)) if base else None,
+                        played=(bool(latest.resolution)
+                                and r == _clamp(latest.resolution))))
+    return out
+
+
+def cost_lines(rows: list[dict], latest: Measured | None) -> list[str]:
+    """The cost table as lines. This is the number, not the advice.
+
+    Every other tool in this ecosystem sets this dial by feel. The
+    add-ons write down what it really cost, so it can be read out instead
+    of guessed at - and what the other settings would cost follows from
+    the same two sessions the suggestion is solved from.
+    """
+    table = costs(rows, latest)
+    if not table or latest is None:
+        return []
+    # The log prints "=== what the work area costs here ===" above this,
+    # so saying it again here is the same sentence twice, one line apart.
+    out = ["in this game, on this card:"]
+    for c in table:
+        line = f"  {c.resolution:>3}%   {c.model_ms:>5.1f} ms of model"
+        if c.fps:
+            line += f"   ->  {c.fps:>3.0f} fps"
+        if c.played:
+            line += "   (this session)"
+        out.append(line)
+    if table[0].fps is None:
+        out.append("this route writes down what the model cost but not "
+                   "your frame rate, so there is no fps here - only the "
+                   "cost of the dial itself.")
+    if not getattr(latest, "from_config", True):
+        # The row marked "(this session)" is the slider's number, not the
+        # add-on's. Said here, because the table otherwise reads as a
+        # measurement of a setting nobody confirmed.
+        out.append("the work area above is the slider's: the add-on's own "
+                   "config could not be read, so which setting this session "
+                   "ran at is not certain.")
+    return out
+
+
+def shared(rows: list[dict], latest: Measured | None) -> dict:
+    """The measured part of a shared result: {"res": 75, "ms": 7.2, ...}.
+
+    Only what was measured, or solved from measurements. An empty dict
+    when the session did not say enough: a published number that was
+    guessed at is worse than no number, because the next person reads it
+    as somebody's real setting.
+    """
+    if latest is None or not latest.resolution:
+        return {}
+    if not getattr(latest, "from_config", True):
+        # The work area is the slider's, because the add-on's config could
+        # not be read. Good enough for a table on screen, not good enough
+        # to publish as what somebody ran.
+        return {}
+    res = _clamp(latest.resolution)
+    out: dict = {"res": res}
+    if latest.fps:
+        out["fps"] = round(float(latest.fps), 1)
+    ms = latest.model_ms
+    if ms is None:
+        points = _points(rows, latest.route)
+        wide = points and abs(points[-1][0] - points[0][0]) >= SHARE_SPREAD
+        got = split(rows, latest) if wide else None
+        if got:
+            ms = got[1] * (res / 100.0) ** 2
+    if ms is not None:
+        out["ms"] = round(float(ms), 2)
+    return out if len(out) > 1 else {}
+
+
 def suggest(rows: list[dict], target_fps: float, current: int,
             route: str, latest: Measured | None = None) -> Suggestion | None:
     """The resolution to run next, and why - or None with nothing to say."""
@@ -231,9 +445,7 @@ def suggest(rows: list[dict], target_fps: float, current: int,
     target_ms = 1000.0 / float(target_fps)
 
     if latest.fps:
-        points = sorted({int(r["resolution"]): 1000.0 / float(r["fps"])
-                         for r in rows
-                         if r.get("fps") and r.get("resolution")}.items())
+        points = _points(rows, latest.route)
         solved = _solve(points)
         now_fps = latest.fps
         if solved:
@@ -280,8 +492,7 @@ def suggest(rows: list[dict], target_fps: float, current: int,
             return Suggestion(current, [
                 f"{now_fps:.0f} fps at {current}% - that is your target. "
                 f"Nothing to change."])
-        seen = len({int(r["resolution"]) for r in rows
-                    if r.get("fps") and r.get("resolution")})
+        seen = len(_points(rows, latest.route))
         return Suggestion(want, [
             f"{now_fps:.0f} fps at {latest.resolution}% "
             f"({latest.frames} frames), {why}.",

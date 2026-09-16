@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import struct
 import tempfile
@@ -47,7 +48,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from . import (emulators, anticheat, dlss, dxvk, feedcfg, games, gpu, mfg, net,
-               optiscaler, pe, prefs, reengine, refw, remix, reshade_ini, sources, vulkan)
+               optiscaler, pe, prefs, reengine, refw, remix, reshade_ini, sources,
+               update, vulkan)
 # Imported by name as well: inside the Options class body the field
 # `dlss: str | None` shadows the module, so `dlss.FEEDER` would read the
 # field's default (None) instead of the module attribute.
@@ -136,7 +138,10 @@ def other_ngx_hooks(root: Path, path: str = "") -> list[str]:
     for low, orig in names.items():
         if low.endswith(".addon64") and low not in ours:
             found.append(orig)
-    return found
+    # A name that is both in OTHER_NGX_HOOKS and an add-on of somebody
+    # else's was counted twice, and the warning read
+    # "dlssnr-companion.addon64, ..., dlssnr-companion.addon64" (#190).
+    return list(dict.fromkeys(found))
 
 
 def hook_warning(root: Path, path: str) -> str:
@@ -649,6 +654,107 @@ def _is_win64_dll(p: Path, least: int = 200_000) -> tuple[bool, str]:
     return True, ""
 
 
+# The last install that failed, and the folder it was for. log.last_error()
+# is the last traceback ANYWHERE in the session - the update check failing
+# offline is one - and a rule that reads it as "this install crashed" told
+# somebody with no install at all that their install had crashed.
+LAST_FAILURE: dict = {}
+
+
+def note_failure(root, exc: BaseException) -> None:
+    """Record that an install into `root` stopped with this error."""
+    import traceback as _tb
+    LAST_FAILURE.clear()
+    LAST_FAILURE.update({
+        "root": str(root), "at": time.time(),
+        "text": "".join(_tb.format_exception(type(exc), exc,
+                                             exc.__traceback__))[-4000:]})
+
+
+# An hour: long enough for a slow download that died and a person who went
+# to make tea, short enough that yesterday's failure is not offered as an
+# explanation for today's folder.
+FAILURE_KEEP = 3600.0
+
+
+def clear_failure(root) -> None:
+    """Forget this folder's failure - an install into it has just worked."""
+    try:
+        if LAST_FAILURE and Path(LAST_FAILURE.get("root") or "") == Path(root):
+            LAST_FAILURE.clear()
+    except OSError:
+        pass
+
+
+def last_failure(root) -> str:
+    """The traceback of an install into this folder, or "".
+
+    Scoped to the folder on purpose: "what went wrong in this session" is
+    not the same question as "what went wrong with THIS install", and the
+    diagnosis is only ever asked the second one.
+    """
+    if not LAST_FAILURE:
+        return ""
+    if time.time() - float(LAST_FAILURE.get("at") or 0) > FAILURE_KEEP:
+        return ""
+    try:
+        same = Path(LAST_FAILURE.get("root") or "").resolve() == Path(root).resolve()
+    except OSError:
+        same = str(LAST_FAILURE.get("root") or "") == str(root)
+    return str(LAST_FAILURE.get("text") or "") if same else ""
+
+
+def _ask_for_the_pass(root: Path, opt, log) -> None:
+    """Set the DLSS 5 add-on's own switch, after ReShade.ini is ours.
+
+    Its default is on, so this is for one case and it is the silent one:
+    somebody who switched the pass off in the overlay once. ReShade.ini
+    keeps that per game forever.
+
+    After the backup, never before: Ini.save() creates the file, and asking
+    for the switch first made the install back up a ReShade.ini it had just
+    written itself - which uninstall would then put back.
+    """
+    if opt.path == ROUTE_RENODX:
+        return                      # ShortFuse's add-on, its own section
+    try:
+        if reshade_ini.enable_dlss5_addon(root):
+            log(f"      [{reshade_ini.ADDON_SECTION}] "
+                f"{reshade_ini.ADDON_SWITCH}=1 (the add-on's own switch)")
+    except OSError:
+        pass                        # a folder we cannot write is said elsewhere
+
+
+def _swapped(was: str, label: str) -> str:
+    """"310.2.1 -> 310.9.1 (NVIDIA SDK)", or the build alone when nothing moved.
+
+    A swap that says only what it put there leaves the person with no way
+    to see what it was worth - and no way to notice, next time, that a
+    launcher has quietly put the old runtime back.
+
+    The two sides are written differently and have to be compared as
+    numbers: `was` is the version stamped in the file on disk ("310.4.0"),
+    the label is the catalog's ("310.4.0 (NVIDIA SDK)"). Comparing the
+    strings printed an arrow between a build and itself on every reinstall.
+    """
+    num = re.match(r"[\d.]+", label or "")
+    return label if (not was or (num and _ver(was) == _ver(num.group(0)))) \
+        else f"{was} -> {label}"
+
+
+def _ver(s: str) -> tuple:
+    """(310, 10, 0) from "310.10.0.0" - trailing zeroes dropped.
+
+    Numbers, not text: "310.10.0".rstrip(".0") and "310.1.0".rstrip(".0")
+    are the same string, so a swap between two different builds printed as
+    if nothing had moved.
+    """
+    parts = [int(n) for n in re.findall(r"\d+", s or "")]
+    while len(parts) > 1 and parts[-1] == 0:
+        parts.pop()
+    return tuple(parts)
+
+
 def _place_family(entries: list, want, dest: Path, rep, root: Path, dl,
                   member: str, prefix: str, log) -> dict:
     """Install the chosen build, falling back to the next source if need be.
@@ -975,6 +1081,35 @@ def _cached_zip_members(pattern: str) -> list[str] | None:
         return None
 
 
+def launcher_warning(g: games.Game) -> str:
+    """Said before and after an install that is going in front of a launcher.
+
+    A launcher starts the game in a new process and then hands over: the
+    files go beside a program that never draws a frame, nothing loads, and
+    the report comes back "it never started" with every file present -
+    GTAVLauncher.exe was the whole of #191, and there is no way to tell it
+    from a game that ignores its proxy once the install is done. So it is
+    said at the one moment it can still be acted on.
+    """
+    exe = getattr(g, "exe", None)
+    if exe is None or not pe.launcher_like(exe):
+        return ""
+    # `or None`: an empty list is not "nothing recorded" to real_exe_for -
+    # it is "these are the candidates", and it then skips the walk that
+    # finds the executable that actually draws.
+    real = pe.real_exe_for(exe, list(getattr(g, "candidates", None) or [])
+                           or None)
+    return (f"{exe.name} looks like a launcher, not the game. A launcher "
+            f"starts the game as a separate program, and nothing installed "
+            f"beside it is loaded by the game."
+            + (f" {real.name} in this folder looks like the one that draws: "
+               f"pick it in the game's details and install again."
+               if real else
+               " Find the executable the game itself runs from - it is "
+               "usually under a Binaries or Bin folder - and install "
+               "there."))
+
+
 def preview(g: games.Game, opt: Options) -> Preview:
     """Everything install() would write, back up, remove or touch outside
     the game folder - without a single network request or write.
@@ -990,6 +1125,9 @@ def preview(g: games.Game, opt: Options) -> Preview:
     root = g.install_dir
     if g.exe_warning:
         pv.warnings.append(games.XBOX_EXE_CHOSEN)
+    note = launcher_warning(g)
+    if note:
+        pv.warnings.append(note)
 
     ok, why = check_supported(g)
     if not ok:
@@ -1847,6 +1985,11 @@ def _write_manifest(root: Path, g: games.Game, opt: Options, rep: Report,
     try:
         _write_atomic(root / MANIFEST, json.dumps({
             "version": 1,
+            # Which BUILD of this tool set the folder up. The report carries
+            # the version that is running now; nothing said what wrote the
+            # install, so a folder built by 1.5.0 and diagnosed by 1.8.2
+            # looked the same as one installed a minute ago (#215).
+            "tool": update.VERSION,
             "complete": complete,
             "exe": g.exe.name if g.exe else None,
             "bitness": g.bitness,
@@ -2153,6 +2296,10 @@ def install(g: games.Game, opt: Options, on_step=None, on_prog=None, on_log=None
     except (OSError, ValueError):
         pass
 
+    lw = launcher_warning(g)
+    if lw:
+        rep.warnings.append(lw)
+        log(f"      !! {lw.split('.')[0]}")
     hw = hook_warning(root, opt.path)
     if hw:
         rep.warnings.append(hw)
@@ -2499,6 +2646,7 @@ def install(g: games.Game, opt: Options, on_step=None, on_prog=None, on_log=None
                 "No ReShade, no feeder and no add-on go into a Remix game. A "
                 "ReShade proxy DLL left in this folder crashes it before it "
                 "draws a frame.")
+            clear_failure(root)     # this folder's last failure is history now
             _write_manifest(root, g, opt, rep, proxy, level, complete=True)
             prefs.add_install(root)
             prog(100, "Done")
@@ -2573,10 +2721,12 @@ def install(g: games.Game, opt: Options, on_step=None, on_prog=None, on_log=None
                     log("      a nvngx_dlss.dll is already here, left untouched")
                     rep.skipped.append(DLSS)
                 else:
+                    was_ = pe.file_version(root / DLSS)
                     e_ = _place_family(catalog_["dlss"], opt.dlss,
                                        root / DLSS, rep, root, dl, DLSS,
                                        "dlss", log)
-                    log(f"      nvngx_dlss {e_['label']} (the game has none: "
+                    log(f"      nvngx_dlss {_swapped(was_, e_['label'])} "
+                        f"(the game has none: "
                         f"OptiScaler runs DLSS in place of its "
                         f"{'FSR' if opt.upscaler == 'fsr' else 'XeSS'})")
                     rep.notes.append(f"dlss version: {e_['label']}")
@@ -2946,10 +3096,11 @@ def install(g: games.Game, opt: Options, on_step=None, on_prog=None, on_log=None
                 log("      the game ships its own nvngx_dlss.dll, left untouched")
                 rep.skipped.append(DLSS)
             else:
+                was = pe.file_version(dlss_dir / DLSS)
                 e = _place_family(catalog["dlss"], opt.dlss,
                                   dlss_dir / DLSS, rep, root, dl, DLSS,
                                   "dlss", log)
-                log(f"      nvngx_dlss {e['label']}")
+                log(f"      nvngx_dlss {_swapped(was, e['label'])}")
                 rep.notes.append(f"dlss version: {e['label']}")
                 rep.components["dlss"] = e["label"]
 
@@ -2980,6 +3131,7 @@ def install(g: games.Game, opt: Options, on_step=None, on_prog=None, on_log=None
                 # install is already done: skip the swap, say so, and carry
                 # on rather than ending the install over an extra.
                 try:
+                    rr_was = pe.file_version(have)
                     rr_entry = _place_family(fam, opt.dlssd, have, rep, root,
                                              dl, DLSSD, "dlssd", log)
                 except PermissionError:
@@ -3000,7 +3152,8 @@ def install(g: games.Game, opt: Options, on_step=None, on_prog=None, on_log=None
                     where = have.relative_to(root)
                 except ValueError:
                     where = have
-                log(f"      nvngx_dlssd {rr_entry['label']} -> {where}")
+                log(f"      nvngx_dlssd {_swapped(rr_was, rr_entry['label'])}"
+                    f"  ({where})")
                 rep.notes.append(f"ray reconstruction: {rr_entry['label']} "
                                  f"(the game's own is backed up and comes "
                                  f"back on uninstall)")
@@ -3028,9 +3181,11 @@ def install(g: games.Game, opt: Options, on_step=None, on_prog=None, on_log=None
                                  "rendering and DLAA/DLSS SR still run")
                 rep.skipped.append(DLSSG)
             else:
+                g_was = pe.file_version(root / DLSSG)
                 e = _place_family(fam, None, root / DLSSG, rep, root, dl,
                                   DLSSG, "dlssg", log)
-                log(f"      nvngx_dlssg {e['label']} (frame generation)")
+                log(f"      nvngx_dlssg {_swapped(g_was, e['label'])} "
+                    f"(frame generation)")
                 rep.notes.append(f"dlssg version: {e['label']}")
                 rep.components["dlssg"] = e["label"]
                 if sm is not None and sm < 89:
@@ -3096,6 +3251,7 @@ def install(g: games.Game, opt: Options, on_step=None, on_prog=None, on_log=None
             _backup(root / "ReShade.ini", rep, root)
             _backup(root / "ReShadePreset.ini", rep, root)
             reshade_ini.write_reshade_ini(root, opt.provider)
+            _ask_for_the_pass(root, opt, log)
             reshade_ini.write_preset(root, opt.provider)
             src = reshade_ini.carry_over(root, [Path(x) for x in prefs.installs()])
             if src is not None:
@@ -3118,6 +3274,7 @@ def install(g: games.Game, opt: Options, on_step=None, on_prog=None, on_log=None
             # only has to load the add-ons sitting next to the executable.
             _backup(root / "ReShade.ini", rep, root)
             reshade_ini.write_addon_only_ini(root)
+            _ask_for_the_pass(root, opt, log)
             if opt.path == ROUTE_RENODX:
                 reshade_ini.enable_renodx_dlss_nr(root)
                 log("      [RENODX-DLSS] NeuralRenderingEnabled=1")
@@ -3210,6 +3367,7 @@ def install(g: games.Game, opt: Options, on_step=None, on_prog=None, on_log=None
                     "driver's optical flow engine")
 
     except PermissionError as e:
+        note_failure(root, e)
         _write_manifest(root, g, opt, rep, proxy, level, complete=False)
         raise InstallError(
             f"Windows refused to write a file:\n{e}\n\n"
@@ -3218,11 +3376,13 @@ def install(g: games.Game, opt: Options, on_step=None, on_prog=None, on_log=None
             f"what was written so far has been recorded, so 'Uninstall' can "
             f"clean up if you would rather start fresh.") from e
     except (sources.RateLimited, sources.Unavailable) as e:
+        note_failure(root, e)
         _write_manifest(root, g, opt, rep, proxy, level, complete=False)
         log("")
         log(str(e))
         raise InstallError(str(e)) from e
     except Exception as e:
+        note_failure(root, e)
         if net.is_disk_full(e):
             # Said in words, and recorded: the diagnosis reads this note
             # instead of telling someone with a full drive to install again.
@@ -3275,6 +3435,7 @@ def install(g: games.Game, opt: Options, on_step=None, on_prog=None, on_log=None
             log(f"         {m}")
 
     # --- record -----------------------------------------------------------
+    clear_failure(root)     # this folder's last failure is history now
     _write_manifest(root, g, opt, rep, proxy, level, complete=True)
     prefs.add_install(root)
     prog(100, "Done")

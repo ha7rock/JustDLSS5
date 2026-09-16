@@ -133,6 +133,13 @@ def cli(target: Path, remove: bool, check: bool, route: str = "",
     if check:
         print(f"installed: {'yes' if g.installed else 'no'}")
         print(f"status   : {'ready' if ok else why}")
+        # The one mode whose whole job is "look, write nothing" was the one
+        # that never said the executable is a launcher: the warning reached
+        # the command line only in install()'s report, after the files were
+        # already written.
+        launcher = installer.launcher_warning(g)
+        if launcher:
+            print(f"warning  : {launcher}")
         local, _ = prefs.find_renodx()
         print(f"renodx   : {local.name if local else 'will download from the mirror'}")
         if ok:

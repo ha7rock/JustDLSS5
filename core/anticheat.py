@@ -47,6 +47,10 @@ MARKERS: tuple[tuple[str, str], ...] = (
     ("genshinimpact", "HoYoverse anti-cheat"),
     ("starrail", "HoYoverse anti-cheat"),
     ("mhyprot", "HoYoverse anti-cheat"),
+    # Elytra: a kernel anti-cheat that new Unreal shooters ship as a folder
+    # of its own beside the game, with its installer in it (WARDOGS). No
+    # file next to the executable, so the folder name is the evidence.
+    ("elytra", "Elytra Anti-Cheat"),
     ("ace-base", "ACE (Anti-Cheat Expert)"),
     ("anticheatexpert", "ACE (Anti-Cheat Expert)"),
 )

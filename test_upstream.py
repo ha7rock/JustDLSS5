@@ -15,7 +15,9 @@ class UpstreamTests(unittest.TestCase):
     def test_diagnostic_catalog_covers_pinned_static_titles_and_verdicts(self):
         import ast
         from frontend.diagnostic_text import translate
-        tree = ast.parse(Path(diagnose.__file__).read_text(encoding="utf8"))
+        source = Path(diagnose.__file__)
+        paths = sorted(source.parent.glob("*.py")) if source.name == "__init__.py" else [source]
+        tree = ast.parse("\n".join(path.read_text(encoding="utf8") for path in paths))
         messages = set()
         for node in ast.walk(tree):
             if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)

@@ -19,6 +19,8 @@ class SessionResult:
     crash: object = None
     related_crash: bool = False
     target: int = 0
+    costs: list = field(default_factory=list)
+    measurements: dict = field(default_factory=dict)
 
 
 def work_applies(game, route):
@@ -79,16 +81,27 @@ def analyse(entry, target=0):
     result = SessionResult("", str(folder), route, verdict=verdict,
                            findings=findings, log_time=getattr(report, "log_time", ""),
                            crash=crash, related_crash=related, target=target)
-    if target and report.ran and not related and work_applies(game, route):
-        resolution = autotune.ran_at(folder, route, 100)
+    if report.ran and not related and work_applies(game, route):
+        exact = autotune.ran_at_exact(folder, route)
+        resolution = exact or 100
         feed = diagnose._last_run(diagnose._tail(folder / diagnose.FEED_LOG, 100_000))
         opti_path = diagnose._opti_log(folder)
         opti = diagnose._last_run(diagnose._tail(opti_path, 100_000)) if opti_path else ""
         measured = autotune.measure(feed, opti, route, resolution)
+        log_path = opti_path if route == dlss.OPTI else folder / diagnose.FEED_LOG
+        if measured and (exact is None or (log_path and autotune.written_after(folder, route, log_path))):
+            measured = None
+            lines.append("配置无法对应本次日志，不生成性能估算。 / Configuration does not match this session; no performance estimate.")
         if measured:
+            measured.from_config = True
             autotune.remember(folder, measured)
             rows = [row for row in autotune.history(folder) if row.get("route") == route]
-            suggestion = autotune.suggest(rows, target, measured.resolution, route, measured)
+            result.costs = autotune.costs(rows, measured)
+            result.measurements = autotune.shared(rows, measured)
+            lines.extend(autotune.cost_lines(rows, measured))
+            if result.measurements:
+                lines.append("Session measurements: " + str(result.measurements))
+            suggestion = autotune.suggest(rows, target, measured.resolution, route, measured) if target else None
             if suggestion:
                 lines.extend(suggestion.lines)
                 result.measured = measured.resolution
