@@ -11,6 +11,7 @@ start    the welcome before a first scan, reached from the name in the corner
 """
 from __future__ import annotations
 
+import math
 import queue
 import threading
 import time
@@ -21,11 +22,11 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from . import (anticheat, autotune, community, components, diagnose, dlss,
+from . import (anticheat, autopilot, autotune, community, components, diagnose, dlss,
                dxvk, feedcfg, reengine, wincrash,
                games, gpu, library, pe, profiles, video,
                installer, log, net, optiscaler, prefs, reshade_ini, selfupdate,
-               sources, update)
+               sources, update, watch)
 from . import mfg as _mfg
 
 APP = "dlss5 autopilot"
@@ -244,6 +245,14 @@ class Scroller(tk.Frame):
         # compare against: winfo_height() is still the old value until the
         # geometry manager has run, and the bar would appear a beat late.
         have = self._h or self._canvas.winfo_height()
+        # ...but never more than the height it actually GOT. Asking for the
+        # full content height does not mean pack can spare it - the log has
+        # a floor of its own - and comparing against the request alone said
+        # "it fits" while the last setting was off the bottom of a window
+        # with no scrollbar (100%: 635 px of form into the 618 it was given).
+        real = self._canvas.winfo_height()
+        if real > 1:
+            have = min(have, real)
         need = self.content_height() > have + 2
         if need and not self._bar.winfo_ismapped():
             # Before the canvas: the canvas is packed with expand=True and
@@ -348,6 +357,59 @@ def _flow_row(bar: tk.Frame, lead: tk.Widget, buttons: list, gap: int,
     bar.bind("<Configure>", lay, add="+")
 
 
+def first_sentence(text: str, limit: int = 130) -> str:
+    """The first sentence of a paragraph, for a line in the log.
+
+    The whole of it is one hover away on the route card, so this is not
+    hiding anything - it is not saying it twice, once in a place with no
+    room for it.
+    """
+    t = " ".join(str(text or "").split())
+    if len(t) <= limit:
+        return t
+    cut = t[:limit]
+    for stop in (". ", "; ", " - "):
+        i = cut.rfind(stop)
+        if i > 40:
+            return cut[:i + 1].rstrip()
+    return cut.rsplit(" ", 1)[0] + "..."
+
+
+def _autopilot_glyph(size: int, fg: str = AMBER) -> tk.PhotoImage:
+    r"""An aircraft yoke, for the button that flies the thing itself.
+
+    Two horns with a crossbar between them, flat across the top and bottom -
+    the silhouette of a control yoke, which is what "autopilot" means on the
+    only instrument panel everybody has seen a picture of.
+
+    Drawn here rather than shipped as a file: Tk's own PhotoImage, filled a
+    row at a time, so there is no image library, no asset to lose, and it
+    scales with the window because the size comes from px(). blank() leaves
+    every pixel transparent, so the button's own background stays.
+    """
+    n = max(11, int(size))
+    img = tk.PhotoImage(width=n, height=n)
+    img.blank()
+    c = (n - 1) / 2.0
+    r = c
+    t = max(1.0, n / 6.5)              # stroke
+    flat = r * 0.62                    # how much of the top and bottom is cut
+    for y in range(n):
+        dy = y - c
+        if abs(dy) > flat:
+            continue                   # the flat top and bottom of a yoke
+        outer = math.sqrt(max(0.0, r * r - dy * dy))
+        ri = r - t
+        inner = math.sqrt(max(0.0, ri * ri - dy * dy)) if abs(dy) < ri else 0.0
+        if abs(dy) <= t / 2 or inner <= 0:
+            img.put(fg, to=(int(round(c - outer)), y,      # the crossbar
+                            int(round(c + outer)) + 1, y + 1))
+        else:
+            for a, b in ((c - outer, c - inner), (c + inner, c + outer)):
+                img.put(fg, to=(int(round(a)), y, int(round(b)) + 1, y + 1))
+    return img
+
+
 def _button_bar(bar: tk.Frame, lead: tk.Widget, buttons: list, gap: int,
                 keep: tuple) -> None:
     """A title and a row of buttons that always stays one line.
@@ -409,6 +471,109 @@ def _button_bar(bar: tk.Frame, lead: tk.Widget, buttons: list, gap: int,
     bar.bind("<Configure>", lay, add="+")
 
 
+class Tip:
+    """A borderless window that follows a widget, shown while the pointer is on it.
+
+    Tk has no tooltip, so this is one: a Toplevel with no decorations, one
+    label in it, put below-right of the pointer and taken down on the way
+    out. It never takes focus, so it cannot swallow a click, and it is
+    clamped to the screen so a long one is not drawn off the edge.
+    """
+
+    def __init__(self, master: tk.Misc) -> None:
+        self.master = master
+        self.win: tk.Toplevel | None = None
+        self._after = None
+        # A tooltip that survives alt-tab, a minimise or the page changing
+        # is a rectangle floating over somebody else's window.
+        try:
+            top = master.winfo_toplevel()
+            for ev in ("<Unmap>", "<FocusOut>"):
+                top.bind(ev, lambda _e: self.hide(), add="+")
+        except tk.TclError:
+            pass
+
+    def show(self, text: str, x: int, y: int, delay: int = 250) -> None:
+        self.hide()
+        if not text.strip():
+            return
+        try:
+            self._after = self.master.after(delay,
+                                            lambda: self._pop(text, x, y))
+        except tk.TclError:
+            self._after = None      # the widget is going away
+
+    def _pop(self, text: str, x: int, y: int) -> None:
+        self._after = None
+        try:
+            win = tk.Toplevel(self.master)
+            win.wm_overrideredirect(True)
+            win.attributes("-topmost", True)
+            lbl = tk.Label(win, text=text, justify="left", anchor="w",
+                           bg=FIELD, fg=TXT, font=font(8),
+                           borderwidth=1, relief="solid",
+                           padx=px(8), pady=px(6),
+                           wraplength=px(420))
+            lbl.pack()
+            win.update_idletasks()
+            w, h = win.winfo_width(), win.winfo_height()
+            sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+            px_, py = x + px(14), y + px(18)
+            # Only clamp on the screen the pointer is on: another monitor
+            # has coordinates outside this one, and clamping would throw the
+            # tip back onto the primary display.
+            if 0 <= x < sw:
+                px_ = min(px_, max(0, sw - w - px(8)))
+                if px_ <= x <= px_ + w:        # would sit under the pointer
+                    px_ = max(0, x - w - px(14))
+            if 0 <= y < sh:
+                py = min(py, max(0, sh - h - px(8)))
+                if py <= y <= py + h:
+                    py = max(0, y - h - px(10))
+            win.wm_geometry(f"+{int(px_)}+{int(py)}")
+            self.win = win
+        except tk.TclError:
+            self.win = None
+
+    def hide(self) -> None:
+        if self._after is not None:
+            try:
+                self.master.after_cancel(self._after)
+            except tk.TclError:
+                pass
+            self._after = None
+        if self.win is not None:
+            try:
+                self.win.destroy()
+            except tk.TclError:
+                pass
+            self.win = None
+
+
+class Hint(tk.Label):
+    """A small marker that holds a paragraph until the pointer asks for it.
+
+    The text is not gone - it is one hover away, and the marker is where the
+    paragraph used to be, so the row still says there is something to read.
+    """
+
+    def __init__(self, parent: tk.Misc, text: str, mark: str = "( ? )") -> None:
+        super().__init__(parent, text=mark, bg=PANEL, fg=DIM, font=font(8),
+                         cursor="question_arrow")
+        self.hint_text = text
+        self._tip = Tip(self)
+        self.bind("<Enter>", self._show)
+        self.bind("<Leave>", lambda _e: self._tip.hide())
+        self.bind("<Button-1>", self._show)
+
+    def set_hint(self, text: str) -> None:
+        self.hint_text = text
+
+    def _show(self, e) -> None:
+        self._tip.show(self.hint_text, e.x_root, e.y_root,
+                       delay=0 if str(e.type) == "ButtonPress" else 250)
+
+
 class Prose(tk.Text):
     """Read-only text that is as tall as what it says, with styled lines.
 
@@ -434,19 +599,58 @@ class Prose(tk.Text):
         self.tag_configure("driver", foreground=AMBER, lmargin1=px(6),
                            lmargin2=ind, spacing1=px(2))
         self.tag_configure("bad", foreground=RUST, spacing3=px(3))
+        self.tag_configure("hint", foreground=DIM, underline=True)
         self.configure(state="disabled")
         self.bind("<Configure>", lambda _e: self.after_idle(self._fit))
+        # What a route IS and what it will not sit beside is worth reading
+        # once; what changes the outcome stays on screen. The rest is behind
+        # this marker.
+        self._tip = Tip(self)
+        self._hidden = ""
+        self.tag_bind("hint", "<Enter>", self._on_hint)
+        self.tag_bind("hint", "<Button-1>", self._on_hint)
+        self.tag_bind("hint", "<Leave>", lambda _e: self._tip.hide())
+        self.bind("<Leave>", lambda _e: self._tip.hide())
 
-    def show(self, parts: list[tuple[str, str]]) -> None:
-        """parts: (tag, text) pairs, one per line."""
+    def _on_hint(self, e) -> None:
+        self._tip.show(self._hidden, e.x_root, e.y_root)
+
+    # What stays is what is about THIS pc and THIS folder: the route your
+    # card cannot run, the driver that faults on it, the file that is in the
+    # way. Everything else is a hover away - and the settings that have to
+    # be changed in the game are printed after the install, under "now
+    # launch the game and:", where they are the next thing you do rather
+    # than a paragraph in front of a button.
+    ALWAYS = ("bad", "driver", "warn")
+
+    def show(self, parts: list[tuple[str, str]], fold: bool = True) -> None:
+        """parts: (tag, text) pairs, one per line.
+
+        `fold`: keep the lines that decide what happens - this PC cannot
+        run the route, the driver faults on it, what must not be in the
+        folder, what to turn off first - and put the description behind a
+        marker the pointer opens.
+        """
+        self._tip.hide()        # it belongs to the text about to go
+        keep = list(parts)
+        self._hidden = ""
+        if fold:
+            hide = [t for tag, t in parts if tag not in self.ALWAYS]
+            if hide:
+                keep = [(tag, t) for tag, t in parts if tag in self.ALWAYS]
+                self._hidden = "\n\n".join(hide)
         self.configure(state="normal")
         self.delete("1.0", "end")
-        for i, (tag, text) in enumerate(parts):
+        for i, (tag, text) in enumerate(keep):
             if i:
                 self.insert("end", "\n")
             if tag in ("warn", "driver"):
                 self.insert("end", "!  ", ("mark", tag))
             self.insert("end", text, tag)
+        if self._hidden:
+            if keep:
+                self.insert("end", "\n")
+            self.insert("end", "what this route is", "hint")
         self.configure(state="disabled")
         self.after_idle(self._fit)
 
@@ -520,6 +724,8 @@ class App:
         # a per-game decision, and retyping it every time would kill it.
         self.target_fps = tk.StringVar(value=str(prefs.get("target_fps") or ""))
         self._tune = None                # the last suggestion, if any
+        self._measured = None            # what the last session cost
+        self._measured_rows = None       # the history it was solved from
         self._last_crash = None          # what Windows recorded, if anything
         self.feeder_pre = tk.BooleanVar(value=False)
         self.dxvk = tk.BooleanVar(value=False)
@@ -2185,6 +2391,7 @@ class App:
                 swapped = False
             self.remix_swap.set(swapped)
         self.game = g
+        self._watch_this_game(g)
         self._paint_rail()
         ok, why = installer.check_supported(g)
         self.protected_details.pack_forget()
@@ -2439,8 +2646,10 @@ class App:
             inner, state="readonly", width=18,
             values=[f"{v}" for v in optiscaler.NR_STYLES.values()])
         self.cb_nrstyle.current(0)
-        self.nrhint = tk.Label(inner, text="the rest is on the overlay",
-                               bg=PANEL, fg=DIM, font=font(8))
+        self.nrhint = Hint(inner, "the rest of the model's dials are in "
+                                  "OptiScaler's own overlay, live, while the "
+                                  "game runs.")
+        self._sync_nrhint()
         # Which OptiScaler + DLSS-NR build goes in (#21).
         self.lbl_optibuild = tk.Label(inner, text="optiscaler build", bg=PANEL,
                                       fg=DIM, font=font(9))
@@ -2485,8 +2694,8 @@ class App:
         self.cb_feederver.current(0)
         self.cb_feederver.bind("<<ComboboxSelected>>", self._on_feederver)
         self.feeder_tags: list[str] = []
-        self.feederhint = tk.Label(
-            inner, bg=PANEL, fg=DIM, font=font(8), anchor="w", justify="left",
+        self.feederhint = Hint(
+            inner,
             text="stable = what GitHub marks as the latest release; or pin an "
                  "exact build when the newest one breaks a game. builds "
                  "before 0.8.0-beta.3 pair with renodx-dlss5 4.55 and have "
@@ -2495,7 +2704,6 @@ class App:
                  "newest add-on is installed unless "
                  "the driver or an OpenGL game pins an older one - the "
                  "install log says which")
-        _wrap_to_width(self.feederhint)
 
         # Some D3D11 games quit the moment ReShade hooks them (MGS V). Through
         # DXVK they render on Vulkan and ReShade loads as a layer instead.
@@ -2678,6 +2886,45 @@ class App:
         ttk.Button(act, text="open folder",
                    command=lambda: self.game and webbrowser.open(str(self.game.install_dir)))\
             .pack(side="left")
+        # Its own row: this one starts the game, watches it and can install a
+        # second route on its own, which is not a thing to squeeze in beside
+        # five buttons that write nothing (#144).
+        self.autorow = tk.Frame(f, bg=BG)
+        self.autorow.pack(side="bottom", fill="x", pady=(8, 0))
+        self._auto_img = _autopilot_glyph(px(15), BG)
+        self.btn_auto = ttk.Button(self.autorow, text=" AUTOPILOT",
+                                   style="Accent.TButton",
+                                   image=self._auto_img, compound="left",
+                                   command=self._autopilot)
+        self.btn_auto.pack(side="left")
+        tk.Label(self.autorow,
+                 text="experimental: installs, starts the game, and tries "
+                      "the next route if nothing of ours got in",
+                 bg=BG, fg=DIM, font=font(8), anchor="w")\
+            .pack(side="left", padx=(10, 0))
+        self.autohint = Hint(
+            self.autorow,
+            "installs the route, starts the game, waits for it to settle and "
+            "reads which DLLs it loaded. If ours are not in it - or the game "
+            "loaded another copy of the same name instead - it waits for you "
+            "to close the game, installs the next route and goes round "
+            "again, up to three. It never starts a game with anti-cheat in "
+            "the folder: there it asks you to.")
+        self.autohint.configure(bg=BG)
+        self.autohint.pack(side="left", padx=(10, 0))
+
+        # Its own row, shown only when the watcher saw the game start from a
+        # different executable than the one this install went beside. Two
+        # controls in one row is the shape nothing tests (#144), and this
+        # one appears and disappears on its own evidence.
+        self.wrongexe = tk.Frame(f, bg=BG)
+        self.wrongexe_label = tk.Label(self.wrongexe, text="", bg=BG, fg=RUST,
+                                       font=font(9), anchor="w")
+        self.wrongexe_label.pack(side="left")
+        self.btn_use_exe = ttk.Button(self.wrongexe, text="use that executable",
+                                      command=self._use_seen_exe)
+        self.btn_use_exe.pack(side="left", padx=(10, 0))
+
         act2 = tk.Frame(f, bg=BG)
         act2.pack(side="bottom", fill="x", pady=(8, 0))
         ttk.Button(act2, text="what will happen?", command=self._preview)\
@@ -2745,7 +2992,16 @@ class App:
             h = f.winfo_height()
             if h < 50:
                 return
-            spare = h - act.winfo_reqheight() - act2.winfo_reqheight() - px(16)
+            # Every row packed to the bottom of this page, not just the two
+            # that were here when this was written: a row nobody subtracts
+            # is height the settings are handed and do not have, and the
+            # scroller then believes it fits (100%: 635 px of content into
+            # 613 px, no scrollbar, the last setting off the window).
+            taken = act.winfo_reqheight() + act2.winfo_reqheight() \
+                + self.autorow.winfo_reqheight()
+            if self.wrongexe.winfo_ismapped():
+                taken += self.wrongexe.winfo_reqheight()
+            spare = h - taken - px(16)
             rows = max(1, int(self.log.cget("height")))
             row = max(1, (self.log.winfo_reqheight() + px(20)) // rows)
             # The settings get what they need, but never more than the
@@ -2816,10 +3072,89 @@ class App:
 
     # ------------------------------------------------------------ diagnose
     def _diagnose(self) -> None:
-        """Read the game's own logs back and say what happened."""
-        if not self.game:
+        """Read the game's own logs back and say what happened.
+
+        Off the Tk thread: since the diagnosis started asking the running
+        game what it had loaded, this walks the process table, opens every
+        process it can and resolves their image paths - which blocks on a
+        dead mapped drive, and used to block the window with it (#8, #18,
+        #32). The answer comes back through the queue.
+        """
+        if self.busy or not self.game:
             return
-        rep = diagnose.analyse(self.game.install_dir)
+        self.busy = True
+        self.btn_diag.configure(state="disabled", text="reading...")
+        g = self.game
+        # Read here, on the Tk thread, and used on the worker: a Tk variable
+        # and the route are live UI state, and a thread may not ask for
+        # them. The work area is the fallback only - what the session really
+        # ran at comes out of the config the add-on read.
+        route = getattr(self, "route", "") or ""
+        fallback = self.workres.get()
+        applies = self._work_applies()
+
+        def work() -> None:
+            try:
+                # The error of an install into THIS folder, not whatever
+                # went wrong last in this session: an update check that
+                # failed offline made the diagnosis tell somebody with no
+                # install at all that their install had crashed.
+                rep = diagnose.analyse(g.install_dir,
+                                       installer.last_failure(g.install_dir))
+                # What the session cost, read here because the logs are
+                # open here: two 100 KB tails, a folder glob and a config
+                # read do not belong on the thread drawing the window.
+                m = (self._measure_session(g.install_dir, route, fallback)
+                     if applies and rep.ran else None)
+                self.q.put(("diagnosed", (g.install_dir, rep, m)))
+            except Exception:
+                log.exception("reading the logs back")
+                self.q.put(("diagfail", traceback.format_exc()))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _measure_session(self, where, route: str, fallback: int):
+        """What this session cost, or None. Called on the worker thread.
+
+        No Tk in here, and it never raises: it is one of two things the
+        diagnosis worker does, and the other one is the diagnosis.
+        """
+        try:
+            d = Path(where)
+            feed_txt = diagnose._last_run(diagnose._tail(d / diagnose.FEED_LOG,
+                                                         100_000))
+            opti_p = diagnose._opti_log(d)
+            opti_txt = (diagnose._last_run(diagnose._tail(opti_p, 100_000))
+                        if opti_p else "")
+            # The resolution the SESSION ran at, read from the file the
+            # add-on read - not from the slider. The slider is live UI: a
+            # route change rewrites it (_sync_workres), so a session played
+            # at 100% could be stored against 75% and poison the two-point
+            # solve for good, because the history keeps one sample per
+            # resolution.
+            exact = autotune.ran_at_exact(d, route)
+            # ...unless it was written after the session it would describe.
+            log_path = (opti_p if route == "optiscaler"
+                        else d / diagnose.FEED_LOG)
+            if exact is not None and log_path is not None \
+                    and autotune.written_after(d, route, log_path):
+                exact = None
+            m = autotune.measure(feed_txt, opti_txt, route,
+                                 fallback if exact is None else exact)
+            if m is not None and exact is None:
+                # The add-on's config did not answer, so the work area is
+                # the slider's. The table still prints; the record does not
+                # carry a number nobody measured.
+                m.from_config = False
+            return m
+        except Exception:
+            return None
+
+    def _diagnosed(self, where, rep, measured=None) -> None:
+        """What _diagnose found, on the Tk thread."""
+        self.busy = False
+        self.btn_diag.configure(state="normal", text="did it work?")
+        if self.game is None or Path(self.game.install_dir) != Path(where):
+            return          # they picked another game while it read
         self._last_diag = rep
         try:
             # Enabled for any diagnosis, not only for a session that logged:
@@ -2841,15 +3176,44 @@ class App:
             self._log(f"{mark} {f_.title}", tag)
             if f_.detail:
                 self._log(f"        {f_.detail}")
+        self._offer_seen_exe()
         if not rep.verdict.startswith("Working"):
+            self._what_next(rep)
             self._log("")
             self._log("> stuck? press [ report a bug ] on the left - the diagnosis "
                       "above and the log tail go into the report, you post it.",
                       "head")
         # After the verdict, not before it: what it cost is the second
         # question, and only worth reading once the first one is answered.
-        self._autotune(rep)
+        self._autotune(rep, measured)
         self._windows_crash(rep)
+
+    def _watch_this_game(self, g) -> None:
+        r"""Watch a folder we have installed into, so the next launch is seen.
+
+        Everything the diagnosis used to guess at - which executable really
+        started, whether our proxy was loaded, whether something else got
+        that name first - Windows answers while the game is up, and nobody
+        is at this window then. So the watching happens while they play and
+        the answer is read back afterwards, when they press "did it work?".
+
+        Only folders this tool has installed into, only while the window is
+        open, and only the process table - it reads, and writes nothing into
+        any game folder.
+        """
+        if g is None:
+            return
+        try:
+            root = g.install_dir
+            man = installer._previous_manifest(root) or {}
+            if not man:
+                return                       # nothing installed here to watch
+            if getattr(self, "_watcher", None) is None:
+                self._watcher = watch.Recorder()
+            self._watcher.add(root, list(man.get("files") or []),
+                              exe=str(man.get("exe") or ""))
+        except Exception:
+            pass                             # never take the window down
 
     def _forget_last_session(self) -> None:
         """Whatever the last diagnosis found belonged to the game it read.
@@ -2861,6 +3225,8 @@ class App:
         self._last_diag = None
         self._last_crash = None
         self._tune = None
+        self._measured = None
+        self._measured_rows = None
         self._noted_routes = set()
         for name, text in (("btn_share", "share the result"),
                            ("btn_tune", "apply the change")):
@@ -3134,7 +3500,7 @@ class App:
         except ValueError:
             return 0
 
-    def _autotune(self, rep) -> None:
+    def _autotune(self, rep, measured=None) -> None:
         """After a session: what it cost, and the resolution to run next.
 
         Nothing is written here. The suggestion is printed with the numbers
@@ -3142,46 +3508,65 @@ class App:
         changes settings behind your back is not one people keep.
         """
         self._tune = None
+        self._measured = None
+        self._measured_rows = None
         try:
             self.btn_tune.configure(state="disabled", text="apply the change")
         except Exception:
             pass
         g, target = self.game, self._target()
-        if g is None or not target or not rep.ran:
+        # A target is needed to suggest a setting. It is not needed to say
+        # what this one cost, and that half used to be thrown away with the
+        # other: somebody who never typed an fps number was told nothing at
+        # all about a session this tool had measured to the millisecond.
+        # The measurement itself was read by the diagnosis worker - the
+        # logs it needs were open there anyway.
+        m = measured
+        if g is None or not rep.ran or m is None:
             return
-        # The slider is disabled where the work area is ignored (DX12, OpenGL,
-        # the 32-bit helper, every route but feeder and optiscaler). Suggesting
-        # a number there would be advice the add-on never reads.
-        if not self._work_applies():
-            return
-        d = g.install_dir
-        route = getattr(self, "route", "") or ""
+        d, route = g.install_dir, getattr(self, "route", "") or ""
         try:
-            feed_txt = diagnose._last_run(diagnose._tail(d / diagnose.FEED_LOG,
-                                                         100_000))
-            opti_p = diagnose._opti_log(d)
-            opti_txt = (diagnose._last_run(diagnose._tail(opti_p, 100_000))
-                        if opti_p else "")
-            # The resolution the SESSION ran at, read from the file the
-            # add-on read - not from the slider. The slider is live UI: a
-            # route change rewrites it (_sync_workres), so a session played
-            # at 100% could be stored against 75% and poison the two-point
-            # solve for good, because the history keeps one sample per
-            # resolution.
-            ran_at = autotune.ran_at(d, route, self.workres.get())
-            m = autotune.measure(feed_txt, opti_txt, route, ran_at)
+            self._autotuned(m, d, route, target)
         except Exception:
+            # The diagnosis is not over: _windows_crash runs after this and
+            # corrects the verdict when Windows recorded a crash. Losing
+            # that to a bad row in prefs.json would leave the screen saying
+            # the opposite of what happened. It goes to the log file, which
+            # travels with the bug report, and not to the window, where it
+            # would sit under a verdict it has nothing to do with.
+            log.exception("working out what the session cost")
             return
-        if m is None:
-            return
+
+    def _autotuned(self, m, d, route: str, target: int) -> None:
+        """What the session cost, and the setting to use next."""
         # Recorded BEFORE the suggestion is worked out, or the newest
         # session is never one of the two points: session two then reported
         # "first measurement for this game" and only session three solved.
-        autotune.remember(d, m)
+        # A work area that is the slider's guess is not a point: it would
+        # sit in the history for good, under a resolution nobody played at.
+        if getattr(m, "from_config", True):
+            autotune.remember(d, m)
+        # Kept for the shared result: what this session cost travels with
+        # "it worked", or the next person with this game gets the outcome
+        # and none of the settings behind it.
+        self._measured = m
+        rows = autotune.history(d)
+        self._measured_rows = rows
+        cost = autotune.cost_lines(rows, m)
+        if cost:
+            self._log("")
+            self._log("=== what the work area costs here ===", "head")
+            for ln in cost:
+                self._log(f"> {ln}")
+        if not target:
+            if cost:
+                self._log('> put a frame rate next to "aim for" and the '
+                          'next session turns this into a setting, not '
+                          'just a number to read.', "head")
+            return
         # `current` is what the SESSION ran at - the slider may have been
         # rewritten by a route change since.
-        sug = autotune.suggest(autotune.history(d), target,
-                               m.resolution, route, m)
+        sug = autotune.suggest(rows, target, m.resolution, route, m)
         if sug is None:
             return
         self._log("")
@@ -3195,6 +3580,29 @@ class App:
                     state="normal", text=f"set the work area to {sug.resolution}%")
             except Exception:
                 pass
+
+    def _measured_for(self, route: str) -> dict:
+        """What the last session cost, if it was this route's session.
+
+        The dropdown can be changed between "did it work?" and "share the
+        result" - the tool itself asks people to change it when a route
+        fails - and the diagnosis it was measured from stays where it is.
+        A cost measured on one route, published against another, is a
+        number the next person sets their game by.
+        """
+        m = getattr(self, "_measured", None)
+        g = self.game
+        if m is None or g is None or getattr(m, "route", "") != route:
+            return {}
+        try:
+            # Read when the session was measured, a moment ago - settings.json
+            # is read and written whole, and this is the fourth read of it
+            # on the thread drawing the window.
+            rows = getattr(self, "_measured_rows", None)
+            return autotune.shared(rows if rows is not None
+                                   else autotune.history(g.install_dir), m)
+        except Exception:
+            return {}
 
     def _apply_tune(self) -> None:
         """Write the suggested work area into the config that is already there.
@@ -3243,6 +3651,11 @@ class App:
         rep, g = self._last_diag, self.game
         if rep is None or g is None:
             return
+        # The route the record is filed under, decided before the record is
+        # built: the dropdown may have been changed since the diagnosis -
+        # next_route() asks people to change it - and a cost measured on
+        # one route must not be published against another.
+        route = getattr(self, "route", "") or ""
         # The Windows event read runs on a worker thread and can land
         # after the button is pressed. A record posted in that gap would
         # say "worked" about a session that crashed - and it goes into a
@@ -3259,23 +3672,128 @@ class App:
         except Exception:
             pass
         rec = community.record(
-            g, getattr(self, "route", "") or str(man.get("path") or ""),
+            g, route or str(man.get("path") or ""),
             "worked" if worked else "failed",
             api=str(man.get("api") or getattr(g, "api", "") or ""),
             build=str(man.get("opti_build") or ""),
             gpu_sm=sm, gpu_name=name or "", driver=gpu.driver_version() or "",
-            version=update.VERSION)
+            version=update.VERSION, measured=self._measured_for(route))
         self._log("")
+        carried = ("your card and driver, this tool's version, whether it "
+                   "worked, and the one-line verdict")
+        if rec.get("res"):
+            carried = ("your card and driver, this tool's version, whether it "
+                       f"worked, the one-line verdict, and what it cost "
+                       f"({rec['res']}% work area"
+                       + (f", {rec['ms']} ms of model a frame"
+                          if rec.get("ms") else "")
+                       + (f", {rec['fps']} fps" if rec.get("fps") else "")
+                       + ")")
         self._log("> a browser window opens with the result in it - nothing "
                   "is sent unless you post it. it carries the game's name "
                   "and executable, the route and build, the graphics api, "
-                  "your card and driver, this tool's version, whether it "
-                  "worked, and the one-line verdict. no paths, no user name, "
+                  + carried + ". no paths, no user name, "
                   "nothing else.", "head")
         try:
             webbrowser.open(community.issue_url(rec, str(getattr(rep, "verdict", ""))))
         except Exception as e:
             self._log(f"[fail] could not open the browser ({e})", "err")
+
+    def _seen_other_exe(self):
+        r"""The executable the watcher saw running, when it is not ours.
+
+        Returns a Path under this game's folder, or None. Only a real file
+        in the tree we can install beside: a game whose real executable is
+        somewhere else entirely is a sentence in the diagnosis, not a button
+        that would install into a folder nobody asked about.
+        """
+        g = self.game
+        if g is None:
+            return None
+        try:
+            seen = watch.last_sighting(g.install_dir,
+                                       diagnose._installed_at(g.install_dir))
+            other = Path(str(seen.get("exe") or ""))
+            recorded = str((installer._previous_manifest(g.install_dir)
+                            or {}).get("exe") or "")
+        except Exception:
+            return None
+        if not seen or not other.name or not recorded:
+            return None
+        if other.name.lower() == Path(recorded).name.lower():
+            return None
+        try:
+            if not other.is_file() or g.folder not in other.parents:
+                return None
+        except OSError:
+            return None
+        return other
+
+    def _offer_seen_exe(self) -> None:
+        """Show (or hide) the row that moves the install to what actually ran."""
+        row = getattr(self, "wrongexe", None)
+        if row is None:
+            return
+        other = self._seen_other_exe()
+        if other is None:
+            row.pack_forget()
+            return
+        self.wrongexe_label.config(
+            text=f"the game ran from {other.name}, and the install went "
+                 f"beside another executable")
+        row.pack(side="bottom", fill="x", pady=(8, 0))
+
+    def _use_seen_exe(self) -> None:
+        """Point the install at the executable the game really runs from."""
+        g, other = self.game, self._seen_other_exe()
+        if g is None or other is None:
+            return
+        self._forget_last_session()
+        if other not in (g.candidates or []):
+            g.candidates = list(g.candidates or []) + [other]
+        g.exe = other
+        g.emu = None
+        games.enrich(g, chosen=True)
+        self._log("")
+        self._log(f"> target exe -> {g.exe.name}  ({g.bit_label} {g.api}); "
+                  f"installing into {g.install_dir}", "head")
+        self._log("  press INSTALL to set it up beside the executable that "
+                  "actually runs. the files beside the old one stay until you "
+                  "uninstall there.", "warn")
+        self._enter_install()
+
+    def _what_next(self, rep) -> None:
+        r"""After a route has failed here: which one to try next, and why.
+
+        Over 47 games and 60 shared results not one row reads "this route
+        rescued a game another could not" - because nobody was ever told to
+        try a second one. The tool knew what worked elsewhere and said
+        nothing at the only moment it mattered: right under a verdict that
+        says this route did not work.
+
+        Off the Tk thread, like every other use of the shared file: it may
+        download, and a download on the Tk thread is #8, #18 and #32.
+        """
+        g = self.game
+        if g is None:
+            return
+        tried = str(getattr(rep, "route", "") or getattr(self, "route", "") or "")
+        # Only routes this game is actually offered - naming one that is not
+        # in the dropdown is #148's shape.
+        offer = list(getattr(getattr(self, "support", None), "options", None) or [])
+        where = g.install_dir
+
+        def work() -> None:
+            try:
+                data = community.fetch()
+                lines = [x for x in (community.next_route(data, g, tried, offer),
+                                     community.driver_note(
+                                         data, gpu.driver_version() or "")) if x]
+            except Exception:
+                return
+            if lines:
+                self.q.put(("community", (where, lines)))
+        threading.Thread(target=work, daemon=True).start()
 
     def _community_note(self) -> None:
         """What other people found in this game, before the install runs.
@@ -3289,14 +3807,35 @@ class App:
         if g is None:
             return
         route, drv_g = getattr(self, "route", "") or "", g
+        applies = self._work_applies()
 
         def work() -> None:
             try:
-                entry = community.for_game(community.fetch(), drv_g)
+                data = community.fetch()
+                # Kept: the autopilot pass reads it to decide which route to
+                # try second, and it may not download on the Tk thread.
+                self._community = data
+                entry = community.for_game(data, drv_g)
                 lines = community.advice(entry, route,
                                          gpu.driver_version() or "")
             except Exception:
                 return
+            try:
+                # What it cost other people, which needs no five reports to
+                # be worth saying: it is a number with its own count beside
+                # it, not a verdict about the game. In its own try: the
+                # file is written by a workflow reading public issues, and
+                # a bad row in it must not cost the advice above as well.
+                # Only where the dial exists: on a route that ignores the
+                # work area, "other people ran this at 70%" is advice about
+                # a setting the add-on never reads, on a page whose own
+                # slider says n/a.
+                said = (community.measured_note(entry, route)
+                        if applies else "")
+                if said:
+                    lines.append(said)
+            except Exception:
+                pass
             if lines:
                 self.q.put(("community", (drv_g.install_dir, lines)))
         threading.Thread(target=work, daemon=True).start()
@@ -3310,7 +3849,7 @@ class App:
                 self.sm = None
         return self.sm
 
-    def _work_applies(self) -> bool:
+    def _work_applies(self, route: str | None = None) -> bool:
         """Is there a resolution dial on this route, for this game?
 
         OptiScaler: always - its model resolution (25-100%) is the fps lever.
@@ -3318,9 +3857,12 @@ class App:
         The add-on's own log line is "settled D3D11 work resolution=..%"; on
         DX12, OpenGL and the 32-bit helper the value is simply ignored, so the
         slider is disabled rather than lying about what it does.
+
+        `route` for the autopilot pass, which asks about routes that are not
+        the one on screen.
         """
         g = self.game
-        route = getattr(self, "route", dlss.FEEDER)
+        route = route or getattr(self, "route", dlss.FEEDER)
         if route == dlss.OPTI:
             return True
         if route != dlss.FEEDER:
@@ -3418,6 +3960,16 @@ class App:
         self._enter_install()
         self.btn_next.config(state="normal" if ok else "disabled")
 
+    def _sync_nrhint(self) -> None:
+        """The overlay key is rebindable, so the sentence has to ask."""
+        try:
+            key = reshade_ini.overlay_key_name(optiscaler.OVERLAY_KEY)
+            self.nrhint.set_hint("the rest of the model's dials are in "
+                                 "OptiScaler's own overlay, live, while the "
+                                 f"game runs - {key} opens it.")
+        except Exception:
+            pass
+
     def _on_route(self, _e=None) -> None:
         """The user picked a different route; re-tune what is shown."""
         if not self.support:
@@ -3436,11 +3988,38 @@ class App:
         if not usable:
             parts.append(("bad", f"NOT FOR THIS PC - {note}."))
         parts.append(("blurb", dlss.BLURB[path]))
+        # The paragraphs that used to be printed into the log in full: why
+        # this route for this game, and what this card does on your GPU.
+        for long_ in (getattr(self, "_why_full", ""),
+                      getattr(self, "_tier_full", "")):
+            if long_:
+                parts.append(("blurb", long_))
         if usable and note:
             parts.append(("note", note))
-        # What this route will not tolerate, in plain words, before INSTALL.
-        for line in getattr(dlss, "CONFLICTS", {}).get(path, ()):
-            parts.append(("warn", line))
+        # What this route will not tolerate - but only the conditions that
+        # are not already met. A folder with nothing foreign in it does not
+        # need to be told, every visit, what must not be in it; and when
+        # something IS there, the file is named, which the general sentence
+        # never did.
+        foreign = []
+        try:
+            if self.game is not None:
+                foreign = installer.other_ngx_hooks(self.game.install_dir, path)
+        except Exception:
+            foreign = []
+        for kind, line in getattr(dlss, "CONFLICTS", {}).get(path, ()):
+            if kind == "ingame":
+                # Said after the install instead, where it is the next thing
+                # to do - _route_instructions prints them.
+                parts.append(("blurb", line))
+            elif kind == "folder":
+                if foreign:
+                    parts.append(("warn", f"{', '.join(foreign[:3])} "
+                                          f"in this folder - {line}"))
+                else:
+                    parts.append(("blurb", line))
+            else:
+                parts.append(("blurb", line))
         for line in dlss.quirks(self.game.exe if self.game else None,
                                 self.game.api if self.game else ""):
             parts.append(("warn", line))
@@ -3454,7 +4033,13 @@ class App:
         except Exception:
             warn = None
         if warn:
-            parts.append(("driver", warn))
+            # The line that decides the most evenings, in one line: the rest
+            # of it - which build to roll back to, what to try first - is
+            # under the same marker as the description.
+            short = first_sentence(warn, 150)
+            parts.append(("driver", short))
+            if short != " ".join(warn.split()):
+                parts.append(("blurb", warn))
         self.routelbl.show(parts)
         feeder = path == dlss.FEEDER
         opti = path == dlss.OPTI
@@ -3487,8 +4072,9 @@ class App:
             self.dlaalbl.grid(row=10, column=2, sticky="w", padx=(10, 0))
         if feeder:
             self.lbl_feederver.grid(row=11, column=0, sticky="w", padx=(0, 14), pady=5)
-            self.cb_feederver.grid(row=11, column=1, columnspan=2, sticky="ew", pady=5)
-            self.feederhint.grid(row=12, column=0, columnspan=3, sticky="ew")
+            self.cb_feederver.grid(row=11, column=1, sticky="ew", pady=5)
+            # Beside the dropdown it explains, not as a paragraph under it.
+            self.feederhint.grid(row=11, column=2, sticky="w", padx=(px(10), 0))
 
         # OptiScaler is loaded by the game under one of several names; the
         # feeder's motion-vector provider sits in the same place on screen.
@@ -3610,7 +4196,7 @@ class App:
         if self.game:
             level, why = installer.reliability(self.game, path)
             self._log(f"> route: {dlss.LABELS[path]}  [{level}]", "head")
-            self._log(f"  {why}")
+            self._log(f"  {first_sentence(why)}")
             if not usable:
                 self._log(f"  !! not for this pc: {note}", "warn")
             self._log(f"  plan: {' -> '.join(installer.plan(self.game, self._opts()))}")
@@ -3716,7 +4302,11 @@ class App:
         body = diagnose.issue_body(
             update.VERSION, name, sm, drv, g, route,
             self._last_diag, log.tail(60, 6000), log.path(), install_dir,
-            last_error=log.last_error(), answers=answers,
+            # The error the DIAGNOSIS read, so that replaying this report
+            # asks the question the tool answered. A session traceback that
+            # belongs to no install goes in under its own heading.
+            last_error=installer.last_failure(self.game.install_dir),
+            session_error=log.last_error(), answers=answers,
             crash=getattr(self, "_last_crash", None))
         try:
             from urllib.parse import quote
@@ -3963,10 +4553,14 @@ class App:
                       f"optiscaler routes need the game's own dlss. if this game "
                       f"does have dlss, press [ report a bug ] and say where the "
                       f"nvngx_dlss.dll is; the log tail goes with it.", "warn")
-        self._log(f"> {self.support.reason}")
+        # The first sentence here, the rest under "what this route is" on
+        # the card - it was two paragraphs before a single press.
+        self._why_full = str(self.support.reason or "")
+        self._log(f"> {first_sentence(self._why_full)}")
         tier = gpu.tier_note(sm)
+        self._tier_full = str(tier or "")
         if tier:
-            self._log(f"> {tier}")
+            self._log(f"> {first_sentence(tier)}")
         self._apply_route(self.support.recommended)
         if len(cands) > 1:
             self._log(f"!! this folder has {len(cands)} executables; selected "
@@ -4131,13 +4725,30 @@ class App:
                   f"dlss {len(ds)}"
                   + (f", ray reconstruction {len(dd)}" if dd else ""))
 
-    def _opts(self) -> installer.Options:
+    def _opts(self, route: str | None = None) -> installer.Options:
+        """The settings on screen, for the route shown or for another one.
+
+        `route` is for the autopilot pass, which installs up to three: half
+        of Options is route-specific (the OptiScaler dials, frame
+        generation, the Remix runtime swap), so taking the first route's
+        settings for all of them made the later attempts weaker installs
+        than the same route by hand.
+        """
+        shown = getattr(self, "route", None)
+        route = route or shown
         if not hasattr(self, "cb_renodx"):
-            return installer.Options()
+            return installer.Options(path=route or dlss.FEEDER)
+        # A dial belongs to the route it was shown for. _apply_route sets
+        # these per route, so handing another route the values on screen
+        # gave the OptiScaler attempt of a pass that started on the feeder a
+        # model resolution of 100% - the one dial that route exists for -
+        # and carried DXVK, MFG and VR into routes the window refuses them
+        # for. For any route but the one on screen, the tool's own defaults.
+        other = bool(route and shown and route != shown)
         val = self.cb_renodx.get()
         local = self.renodx_local if val.startswith("[local]") else None
         feed: dict = {}
-        if self._work_applies() and self.workres.get() != 100:
+        if self._work_applies(route) and not other and self.workres.get() != 100:
             feed["work_resolution"] = self.workres.get()
         pi = self.cb_preset.current()
         if pi > 0:
@@ -4147,7 +4758,11 @@ class App:
             feed["hdr"] = list(feedcfg.HDR.keys())[hi]
         clean = lambda v: None if (not v or v.startswith(("loading", "auto"))) else v
         nr: dict = {}
-        if getattr(self, "route", None) == dlss.OPTI and hasattr(self, "cb_nrpreset"):
+        if route == dlss.OPTI and other:
+            # Its own default, not the slider that was showing another
+            # route's 100%.
+            nr["WorkingScale"] = round(optiscaler.NR_SCALE_DEFAULT / 100, 2)
+        elif route == dlss.OPTI and hasattr(self, "cb_nrpreset"):
             nr["WorkingScale"] = round(self.workres.get() / 100, 2)
             if self.cb_nrpreset.current() > 0:
                 nr["Preset"] = list(optiscaler.NR_PRESETS.keys())[self.cb_nrpreset.current()]
@@ -4173,13 +4788,13 @@ class App:
             feeder_prerelease=self.cb_feederver.current() == 1,
             feeder_tag=(self.feeder_tags[self.cb_feederver.current() - 2]
                         if self.cb_feederver.current() >= 2 else ""),
-            dxvk=self.dxvk.get(),
-            fg=bool(self.fg.get()) and getattr(self, 'route', None) == dlss.OPTI,
-            mfg=bool(self.mfg.get()),
-            vr=bool(self.vr.get()),
+            dxvk=self.dxvk.get() and not other,
+            fg=bool(self.fg.get()) and route == dlss.OPTI and not other,
+            mfg=bool(self.mfg.get()) and not other,
+            vr=bool(self.vr.get()) and not other,
             remix_swap=bool(self.remix_swap.get()) and
-            getattr(self, 'route', None) == dlss.REMIX,
-            path=getattr(self, 'route', dlss.FEEDER),
+            route == dlss.REMIX,
+            path=route or dlss.FEEDER,
             native_dlss=bool(self.support and self.support.native_dlss),
             upscaler=str(getattr(self.support, 'upscaler', '') or ''),
             opti_proxy=("" if self.cb_proxy.current() <= 0
@@ -4232,6 +4847,172 @@ class App:
                 else:
                     self.q.put(("fail", traceback.format_exc()))
         threading.Thread(target=work, daemon=True).start()
+
+    def _autopilot(self) -> None:
+        r"""Install, start the game, read what it loaded, try the next route.
+
+        The consent screen is the point of this, not a formality: it starts
+        somebody's game and it can install a second route without asking
+        again, so it says both, in those words, before anything happens.
+        """
+        if self.busy or not self.game:
+            return
+        g, opt = self.game, self._opts()
+        # The same warning INSTALL gives, before the button that installs up
+        # to three routes on its own. may_start() refuses to START an
+        # anti-cheat game; it says nothing about writing files into one.
+        try:
+            ac = anticheat.detect(g.install_dir, g.folder)
+        except Exception:
+            ac = None
+        if ac is not None and ac.present and not messagebox.askyesno(
+                APP,
+                f"{ac.summary} is installed in this game.\n\n"
+                f"This is an online game. ReShade add-ons and anti-cheat do not "
+                f"coexist: the game may refuse to start, delete the files, or "
+                f"ban the account. Nobody but you carries that risk.\n\n"
+                f"Go on anyway?"):
+            return
+        offer = list(getattr(getattr(self, "support", None), "options", None)
+                     or [getattr(self, "route", "") or opt.path])
+        # What order to try them in is not a guess: the shared results say
+        # which route rescued THIS game on somebody else's machine, and that
+        # one goes second, before the rest of the dropdown. Read from the
+        # copy already fetched for this game - never a download on the Tk
+        # thread (#8, #18, #32).
+        routes = autopilot.plan(getattr(self, "route", "") or opt.path, offer,
+                                getattr(self, "_community", None), g)
+        if not routes:                      # nothing this game is offered
+            return
+        may, why = autopilot.may_start(g)
+        if not messagebox.askyesno(
+                APP,
+                f"{g.name}\n\n"
+                # Said where it is pressed, not only in the release notes:
+                # every other feature that has not been through many
+                # machines says so on the control itself.
+                f"AUTOPILOT is experimental.\n\n"
+                f"This will:\n"
+                f"  1. install the {routes[0]} route\n"
+                + (f"  2. start {g.exe.name if g.exe else 'the game'}\n"
+                   if may else
+                   f"  2. ask you to start the game - {why}\n")
+                + f"  3. read which DLLs the running game loaded (it reads the "
+                  f"process; it writes nothing into it)\n"
+                  f"  4. if ours are not in it - or the game loaded another "
+                  f"copy of the same name instead - wait for you to close "
+                  f"the game, install the next route and go round again\n\n"
+                  f"Routes it may try, in order: {', '.join(routes)}. It "
+                  f"installs the next one without asking again.\n"
+                  f"It stops after those, or when you press stop.\n\n"
+                  f"Go ahead?"):
+            return
+        self.busy = True
+        self._auto_stop = False
+        self.btn_auto.config(text="stop", image="", command=self._autopilot_stop)
+        self.btn_next.config(state="disabled")
+        self._log("")
+        self._log(f"=== {g.name}: autopilot ===", "head")
+        # Every route's settings, read HERE: _opts() reads Tk widgets and Tk
+        # variables, and this is the one place in this file that would have
+        # read them from a worker thread.
+        per_route = {r: self._opts(r) for r in routes}
+
+        def work() -> None:
+            try:
+                hooks = autopilot.Hooks(
+                    install=lambda gg, oo: installer.install(
+                        gg, oo, on_log=lambda t: self.q.put(("log", t))),
+                    # Read once per route, off the Tk thread but only from
+                    # widgets nothing else is touching while this runs.
+                    options=lambda base, route: per_route.get(route, base),
+                    log=lambda t, kind="": self.q.put(("autolog", (t, kind))),
+                    stop=lambda: self._auto_stop)
+                out = autopilot.run(g, opt, routes, hooks)
+                self.q.put(("autopilot", out))
+            except installer.InstallError as e:
+                self.q.put(("autofail", str(e)))
+            except Exception:
+                log.exception("the autopilot pass")
+                self.q.put(("autofail", traceback.format_exc()))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _autopilot_stop(self) -> None:
+        """End the pass once the install it is running finishes.
+
+        Never mid-install - a half-written folder is worse than one more
+        route - but it does not go on to start the game and read the
+        module list either.
+        """
+        self._auto_stop = True
+        self._log("> stopping when this install finishes", "warn")
+        self.btn_auto.config(state="disabled")
+
+    def _autopilot_done(self, out) -> None:
+        """Say what the pass found, and leave the window as an install does.
+
+        An install through INSTALL ends in _finish_ok, which forgets the
+        game's cached compatibility row, starts watching the folder, enables
+        uninstall and prints what to press in the game. A pass that installs
+        up to three routes and does none of that leaves somebody with files
+        in their folder, a disabled uninstall button and no instructions.
+        """
+        self._auto_stop = False
+        self.busy = False
+        self.btn_auto.config(text=" AUTOPILOT", state="normal",
+                             image=self._auto_img, command=self._autopilot)
+        self.btn_next.config(state="normal")
+        self._idle()
+        self._log("")
+        self._log(f"> {autopilot.summary(out)}", "ok" if out.ok else "warn")
+        # Whatever is on the disk, including a route whose install stopped
+        # part way: that folder has files and a record, and leaving
+        # 'uninstall' greyed out over it is the opposite of what it needs.
+        left = out.installed or getattr(out, "left", "")
+        options = list(getattr(getattr(self, "support", None), "options", None)
+                       or [])
+        if left and options and left not in options:
+            # The record is from an earlier session and names a route this
+            # game is not offered now. Say what is in the folder, but do not
+            # move the window to a route the dropdown does not have (#30).
+            self._log(f"> the folder's record says a {left} install is in "
+                      f"it - 'uninstall' takes that out.", "warn")
+            left = ""
+        if not left and not (out.installed or getattr(out, "left", "")):
+            return
+        # The window is about the route that is now on the disk, whatever
+        # was picked before it. Through _apply_route, because that is what
+        # moves the dropdown, the blurb, the warnings and what _opts() reads
+        # - assigning self.route alone left the dropdown saying one thing
+        # and the next INSTALL doing another (#30's shape).
+        self._select_route(left)
+        self._forget_row(self.game)
+        self._watch_this_game(self.game)
+        try:
+            self.btn_remove.config(state="normal")
+        except tk.TclError:
+            pass
+        # Only where there is a working install to give instructions for:
+        # after three routes that did not load, the next step is the bug
+        # report, not "press Home in the game". A video player has its own
+        # checklist and no in-game keys at all.
+        if out.ok and getattr(self.game, "kind", "") != "video":
+            self._log("")
+            self._route_instructions(left, running=True)
+        if not out.ok and out.attempts and out.attempts[-1].started:
+            self.btn_diag.focus_set()
+
+    def _select_route(self, route: str) -> None:
+        """Move the route dropdown to `route`, the way a person would."""
+        options = list(getattr(getattr(self, "support", None), "options", None)
+                       or [])
+        try:
+            if route in options and hasattr(self, "cb_route"):
+                self.cb_route.current(options.index(route))
+            self._apply_route(route)
+        except Exception:
+            log.exception("moving the window to the route that was installed")
+            self.route = route
 
     def _uninstall(self) -> None:
         if self.busy or not self.game:
@@ -4494,6 +5275,20 @@ class App:
                               "into it.", "ok")
                     self._enter_install()
                     self._show(3)
+                elif kind == "diagnosed":
+                    self._diagnosed(*payload)
+                elif kind == "diagfail":
+                    self.busy = False
+                    self.btn_diag.configure(state="normal", text="did it work?")
+                    self._log(str(payload), "err")
+                elif kind == "autolog":
+                    text, level = payload
+                    self._log(text, level)
+                elif kind == "autopilot":
+                    self._autopilot_done(payload)
+                elif kind == "autofail":
+                    self._autopilot_done(autopilot.Outcome(stopped=str(payload)))
+                    self._log(str(payload), "err")
                 elif kind == "removed":
                     self._idle()
                     self._forget_row(self.game)
@@ -4537,42 +5332,21 @@ class App:
                 self._offer_crash_report()
             self.root.after(60, self._pump)
 
-    def _finish_ok(self, rep: installer.Report) -> None:
-        self._idle()
-        # Only this game's row changed. Clearing them all used to be free;
-        # now that the rows are kept for the next launch it would throw the
-        # whole library's compatibility pass away and make the next start
-        # re-read every folder on the Tk thread (issues #8, #18, #32).
-        self._forget_row(self.game)
-        self.pb["value"] = 100
-        self.pblbl.config(text="")
-        self._log("")
-        self._log(f"> done - {len(rep.written)} files written", "ok")
-        for n in rep.notes:
-            self._log(f"    {n}")
-        for w in rep.warnings:
-            self._log(f"!!  {w}", "warn")
-        if rep.skipped:
-            self._log(f"    left untouched: {', '.join(rep.skipped)}")
-        self._log("")
-        route = getattr(self, "route", dlss.FEEDER)
-        if self.game and getattr(self.game, "kind", "") == "video":
-            self._log("> now open the player and:", "head")
-            for line in video.CHECKLIST:
-                self._log(f"   {line}")
-            self._log("")
-            self._log("!! neural rendering re-draws EVERYTHING in the window, "
-                      "menus and subtitles included - use the player fullscreen "
-                      "(double-click the video). the first seconds after a "
-                      "seek or a resolution change look smeared while the "
-                      "history rebuilds.", "warn")
-            self._log("")
-            self._log("> watched something? come back and press 'did it work?' - "
-                      "it reads the logs and tells you what happened.", "head")
-            self.btn_remove.config(state="normal")
-            self.status.config(text="install complete - open the player")
-            return
-        self._log("> now launch the game and:", "head")
+    def _route_instructions(self, route: str, running: bool = False) -> None:
+        """What to press in the game, for the route that was installed.
+
+        Its own method because two paths end with an install now: the
+        INSTALL button and the autopilot pass. The pass used to leave
+        somebody with files in their folder and no idea what to open.
+        """
+        self._log("> in the game, now that it is running:" if running
+                  else "> now launch the game and:", "head")
+        # The settings this route needs changed in the game itself. They are
+        # not on the install page - a condition read before anything is
+        # pressed is in the way; here it is the next thing to do.
+        for _kind, _line in getattr(dlss, "CONFLICTS", {}).get(route, ()):
+            if _kind == "ingame":
+                self._log(f"   !  {_line}", "warn")
         if route == dlss.OPTI:
             self._log(f"   1. press {reshade_ini.overlay_key_name('Insert')} to open "
                       f"the optiscaler overlay")
@@ -4689,6 +5463,51 @@ class App:
         self._log("")
         self._log("> played it? come back and press 'did it work?' - it reads the "
                   "logs and tells you what happened.", "head")
+        self._log("   leave this window open while you play: it watches for the "
+                  "game to start and notes which of these files it loads. that "
+                  "is the one thing nothing can read back once the game has "
+                  "closed.")
+
+    def _finish_ok(self, rep: installer.Report) -> None:
+        self._idle()
+        # Only this game's row changed. Clearing them all used to be free;
+        # now that the rows are kept for the next launch it would throw the
+        # whole library's compatibility pass away and make the next start
+        # re-read every folder on the Tk thread (issues #8, #18, #32).
+        self._forget_row(self.game)
+        self.pb["value"] = 100
+        self.pblbl.config(text="")
+        self._log("")
+        self._log(f"> done - {len(rep.written)} files written", "ok")
+        # From here until the game is seen once, the process table is
+        # watched: what loads into the game is the evidence every "it never
+        # started" report was missing, and it only exists while it runs.
+        self._watch_this_game(self.game)
+        for n in rep.notes:
+            self._log(f"    {n}")
+        for w in rep.warnings:
+            self._log(f"!!  {w}", "warn")
+        if rep.skipped:
+            self._log(f"    left untouched: {', '.join(rep.skipped)}")
+        self._log("")
+        route = getattr(self, "route", dlss.FEEDER)
+        if self.game and getattr(self.game, "kind", "") == "video":
+            self._log("> now open the player and:", "head")
+            for line in video.CHECKLIST:
+                self._log(f"   {line}")
+            self._log("")
+            self._log("!! neural rendering re-draws EVERYTHING in the window, "
+                      "menus and subtitles included - use the player fullscreen "
+                      "(double-click the video). the first seconds after a "
+                      "seek or a resolution change look smeared while the "
+                      "history rebuilds.", "warn")
+            self._log("")
+            self._log("> watched something? come back and press 'did it work?' - "
+                      "it reads the logs and tells you what happened.", "head")
+            self.btn_remove.config(state="normal")
+            self.status.config(text="install complete - open the player")
+            return
+        self._route_instructions(route)
         self.btn_remove.config(state="normal")
         self.status.config(text="install complete")
 

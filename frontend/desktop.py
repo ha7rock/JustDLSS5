@@ -17,7 +17,8 @@ from .service import BackendService, LibraryEntry
 from .jobs import Jobs
 from .library import LibraryModel, LibraryFilter, LibraryTable
 from .theme import STYLES
-from .controls import Button, ComboBox, Slider
+from .controls import Button, ComboBox, Slider, HelpButton
+from .help_text import explanation
 from .about import NAME, VERSION, REPOSITORY
 from . import feedback, updates
 from .diagnostic_view import DiagnosticDialog
@@ -371,6 +372,17 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.library_split, 1)
         return page
 
+    def _help_heading(self, title, key):
+        heading = QWidget()
+        heading.setObjectName("helpHeading")
+        heading_row = row(heading, 6)
+        heading_row.addWidget(label(title, "muted", True))
+        help_button = HelpButton(self.t(title + "说明", "About " + title), explanation(key, self.chinese))
+        help_button.setProperty("helpKey", key)
+        heading_row.addWidget(help_button)
+        heading_row.addStretch()
+        return heading
+
     def _detail_panel(self):
         panel = QWidget()
         outer = column(panel, 0, 0)
@@ -392,13 +404,14 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.game_path)
         self.route_combo = ComboBox()
         self.route_combo.currentIndexChanged.connect(self._route_changed)
-        layout.addWidget(label(self.t("安装路线", "Installation route"), "muted"))
+        layout.addWidget(self._help_heading(self.t("安装路线", "Installation route"), "route"))
         layout.addWidget(self.route_combo)
         self.route_hint = label("", "muted", True)
         layout.addWidget(self.route_hint)
         self.engine_warning = label("", "warning", True)
         layout.addWidget(self.engine_warning)
         layout.addWidget(label(self.t("仅用于离线游戏 · 不支持反作弊环境", "Offline games only · not for anti-cheat environments"), "muted", True))
+        layout.addWidget(self._help_heading(self.t("画质与性能", "Quality and performance"), "quality"))
         layout.addWidget(label(self.t("画质方案", "Quality profile"), "muted"))
         self.quality_combo = ComboBox()
         for text, key in ((self.t("画质优先", "Quality"), "Quality"), (self.t("均衡", "Balanced"), "Balanced"),
@@ -444,6 +457,7 @@ class MainWindow(QMainWindow):
         form.setSpacing(10)
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        form.addRow(self._help_heading(self.t("程序识别", "Game detection"), "target"))
         self.exe_combo = ComboBox()
         self.exe_combo.activated.connect(self._exe_changed)
         form.addRow(self.t("目标程序", "Executable"), self.exe_combo)
@@ -459,12 +473,14 @@ class MainWindow(QMainWindow):
         self.arch_combo.addItem("32-bit", 32)
         self.arch_combo.activated.connect(self._architecture_changed)
         form.addRow(self.t("程序架构", "Architecture"), self.arch_combo)
+        form.addRow(self._help_heading(self.t("补帧", "Frame generation"), "frames"))
         self.fg_check = QCheckBox(self.t("FSR 补帧 · 2x", "FSR frame generation · 2x"))
         self.fg_check.setToolTip(self.t("OptiScaler / DX12。请关闭游戏内补帧；可能增加延迟。", "OptiScaler / DX12. Disable in-game frame generation; may add latency."))
         form.addRow(self.fg_check)
         self.mfg_check = QCheckBox(self.t("RTX 40 MFG（实验性）", "RTX 40 MFG (experimental)"))
         self.mfg_check.setToolTip(self.t("需游戏自带 DLSS 补帧并保持开启。在 ReShade 面板选择 3x/4x；可能产生画面错误或崩溃。", "Requires the game's DLSS frame generation enabled. Select 3x/4x in ReShade; may cause artifacts or crashes."))
         form.addRow(self.mfg_check)
+        form.addRow(self._help_heading(self.t("Feeder 设置", "Feeder settings"), "feed"))
         self.provider_combo = ComboBox()
         for key, value in reshade_ini.PROVIDERS.items():
             self.provider_combo.addItem(value[0], key)
@@ -477,6 +493,7 @@ class MainWindow(QMainWindow):
         for key, value in feedcfg.HDR.items():
             self.hdr_combo.addItem(value, key)
         form.addRow("HDR", self.hdr_combo)
+        form.addRow(self._help_heading(self.t("OptiScaler 画面设置", "OptiScaler image settings"), "model"))
         self.nr_preset = ComboBox()
         for key, value in optiscaler.NR_PRESETS.items():
             self.nr_preset.addItem(str(value), key)
@@ -485,6 +502,7 @@ class MainWindow(QMainWindow):
         for key, value in optiscaler.NR_STYLES.items():
             self.nr_style.addItem(str(value), key)
         form.addRow(self.t("NR 风格", "NR style"), self.nr_style)
+        form.addRow(self._help_heading(self.t("插件加载", "Plug-in loading"), "loading"))
         self.proxy_combo = ComboBox()
         self.proxy_combo.addItem(self.t("自动选择", "Automatic"), "")
         for value in installer.RESHADE_PROXIES:
@@ -504,6 +522,7 @@ class MainWindow(QMainWindow):
         for key, description in optiscaler.BUILDS.items():
             self.opti_build.addItem(build_labels.get(key, description), key)
         form.addRow(self.t("OptiScaler 分支", "OptiScaler build"), self.opti_build)
+        form.addRow(self._help_heading(self.t("可选组件", "Optional components"), "optional"))
         self.vr_check = QCheckBox(self.t("OpenXR（实验性，未实测）", "OpenXR (experimental, untested)"))
         self.vr_check.setToolTip(self.t(
             "注册当前 Windows 用户的全局 OpenXR 层，影响其他 OpenXR 应用。不支持 OpenVR / SteamVR。",
@@ -513,6 +532,7 @@ class MainWindow(QMainWindow):
         form.addRow(self.dxvk_check)
         self.remix_swap = QCheckBox(self.t("替换 Remix 运行时（实验性）", "Replace Remix runtime (experimental)"))
         form.addRow(self.remix_swap)
+        form.addRow(self._help_heading(self.t("组件版本", "Component versions"), "versions"))
         self.version_combos = {}
         for key, title in (("renodx", "DLSS 5 add-on"), ("dlssnr", "nvngx_dlssnr"), ("dlss", "nvngx_dlss"), ("dlssd", self.t("光线重建", "Ray reconstruction"))):
             combo = ComboBox()
@@ -1075,10 +1095,26 @@ class MainWindow(QMainWindow):
                                 (self.t("截图效果对比", "Screenshot comparison"), self.show_comparison),
                                 (self.t("打开游戏文件夹", "Open game folder"), lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.current.game.folder))))):
             menu.addAction(title, callback)
+        menu.addAction(self.t("自动尝试路线（实验性）", "Automatic route trials (experimental)"), self.automatic_trials)
         menu.addSeparator()
         action = menu.addAction(self.t("卸载增强组件", "Uninstall components"), self.uninstall_selected)
         action.setEnabled(self.current.installed)
         menu.exec(self.more_button.mapToGlobal(self.more_button.rect().bottomLeft()))
+
+    def automatic_trials(self):
+        if not self.current or not self.inspection or self.busy_job:
+            return
+        from .pilot import prepare, PilotDialog
+        entry, options, inspection = self.current, self._options(), self.inspection
+        def ready(plan):
+            dialog = PilotDialog(entry, plan, self.chinese, self)
+            dialog.exec()
+            if dialog.started:
+                self._submit(lambda emit: self.service.decorate(entry.game), self._added, busy=True,
+                             title=self.t("正在更新安装状态…", "Refreshing installation state…"))
+            dialog.deleteLater()
+        self._submit(lambda emit: prepare(entry, options, inspection), ready, busy=True,
+                     title=self.t("正在检查自动尝试条件…", "Checking trial requirements…"))
 
     def diagnose_selected(self):
         entry = self.current

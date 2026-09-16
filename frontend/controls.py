@@ -1,9 +1,104 @@
 """Shared desktop controls with consistent popup geometry."""
-from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer
+from html import escape
+from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt, QTimer, QEvent
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QApplication, QComboBox, QFrame, QListView,
     QPushButton, QSlider, QStyledItemDelegate, QStyle, QStyleOptionButton,
-    QStyleOptionComboBox, QStylePainter, QToolTip)
+    QStyleOptionComboBox, QStylePainter, QToolTip, QToolButton, QWidget, QLabel, QVBoxLayout)
+
+
+class HelpPopup(QWidget):
+    """Non-activating help card with transparent, antialiased corners."""
+
+    def __init__(self, owner, text):
+        super().__init__(owner, Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.body = QLabel(self)
+        self.body.setWordWrap(True)
+        self.body.setText('<p style="line-height:145%; margin:0">' + escape(text) + '</p>')
+        self.body.setStyleSheet("color: #e4e8ee; background: transparent; border: none; font-size: 14px;")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.addWidget(self.body)
+
+    def show_at(self, owner):
+        area = owner.screen().availableGeometry().adjusted(8, 8, -8, -8)
+        width = min(340, area.width())
+        self.body.setFixedWidth(width - 36)
+        height = self.body.heightForWidth(width - 36) + 32
+        self.setFixedSize(width, height)
+        point = owner.mapToGlobal(QPoint(0, owner.height() + 8))
+        if point.y() + height > area.bottom():
+            point.setY(owner.mapToGlobal(QPoint(0, -height - 8)).y())
+        point.setX(max(area.left(), min(point.x(), area.right() - width + 1)))
+        point.setY(max(area.top(), min(point.y(), area.bottom() - height + 1)))
+        self.move(point)
+        self.show()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor("#454e5a"), 1))
+        painter.setBrush(QColor("#272e37"))
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(.5, .5, -.5, -.5), 12, 12)
+
+
+class HelpButton(QToolButton):
+    """Show help after 750 ms of hover; leaving cancels it."""
+
+    def __init__(self, title, text, parent=None):
+        super().__init__(parent)
+        self.setObjectName("contextHelp")
+        self.setText("?")
+        self.setFixedSize(16, 16)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setAccessibleName(title)
+        self.setAccessibleDescription(text)
+        self._popup = None
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setSingleShot(True)
+        self._hover_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._hover_timer.setInterval(750)
+        self._hover_timer.timeout.connect(self._show_help)
+
+    def enterEvent(self, event):
+        super().enterEvent(event)
+        self._hover_timer.start()
+
+    def leaveEvent(self, event):
+        self._dismiss()
+        super().leaveEvent(event)
+
+    def hideEvent(self, event):
+        self._dismiss()
+        super().hideEvent(event)
+
+    def event(self, event):
+        if event.type() == QEvent.Type.ToolTip:
+            return True
+        return super().event(event)
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.ApplicationDeactivate or (
+                event.type() == QEvent.Type.WindowDeactivate and watched is self.window()):
+            self._dismiss()
+        return False
+
+    def _show_help(self):
+        if not self.isVisible() or not self.isEnabled() or not self.underMouse():
+            return
+        if self._popup is None:
+            self._popup = HelpPopup(self, self.accessibleDescription())
+        QApplication.instance().installEventFilter(self)
+        self._popup.show_at(self)
+
+    def _dismiss(self):
+        QApplication.instance().removeEventFilter(self)
+        self._hover_timer.stop()
+        if self._popup is not None:
+            self._popup.hide()
 
 
 class Button(QPushButton):

@@ -41,7 +41,7 @@ class Ini:
     def parse(cls, text: str) -> "Ini":
         ini = cls()
         cur = 0
-        for line in text.splitlines():
+        for line in text.lstrip("\ufeff").splitlines():
             s = line.strip()
             if not s or s[0] in ";#":
                 continue
@@ -286,6 +286,70 @@ def write_shader_paths(game_dir: Path) -> None:
     ini.set_default("GENERAL", "PresetPath", r".\ReShadePreset.ini")
     ini.set_default("ADDON", "AddonPath", ".\\")
     ini.save(p)
+
+
+# Where the DLSS 5 add-on keeps its own switches. ReShade gives an add-on
+# config_get/set_config_value, and they land in ReShade.ini under a section
+# of the add-on's choosing - this is the DLSS 5 one, confirmed three ways:
+# a real ReShade.ini beside DEATHLOOP on the owner's machine carries
+# [RenoDX.DLSS5] NeuralUplift=1, the feeder and the bridge both read that
+# section out of the file themselves ("DLSS 5 add-on settings, read from
+# ReShade.ini"), and the same names are in their binaries.
+ADDON_SECTION = "RenoDX.DLSS5"
+ADDON_SWITCH = "NeuralUplift"
+
+
+def addon_state(game_dir: Path) -> dict:
+    """What the DLSS 5 add-on has written about itself, or {}.
+
+    The diagnosis used to end "open the overlay and read the status", which
+    is the question handed back to the person who asked it. The status is
+    in a file, on their disk, next to the game.
+
+    {"switch": "1"|"0"|None, "keys": {...}, "overlay_seen": bool}. An empty
+    dict means there is no ReShade.ini to read - not that anything is off.
+    """
+    p = Path(game_dir) / "ReShade.ini"
+    if not p.is_file():
+        return {}
+    ini = Ini.load(p)
+    keys = {}
+    for name, kv in ini.sections:
+        if name.lower() == ADDON_SECTION.lower():
+            keys = {k: v for k, v in kv}
+            break
+    seen = ""
+    for name, kv in ini.sections:
+        if name.upper() == "ADDON":
+            seen = next((v for k, v in kv if k.lower() == "overlaycollapsed"), "")
+            break
+    switch = next((v for k, v in keys.items()
+                   if k.lower() == ADDON_SWITCH.lower()), None)
+    return {"switch": switch, "keys": keys, "overlay_seen": bool(seen)}
+
+
+def enable_dlss5_addon(game_dir: Path) -> bool:
+    """Ask the DLSS 5 add-on for the neural pass, in its own section.
+
+    Its default is on, so this matters for one case and it is the silent
+    one: somebody who switched it off in the overlay once. ReShade.ini keeps
+    that per game forever, and an install that says "set up" over it is the
+    quiet failure this project keeps chasing.
+
+    Only when the key is absent - a deliberate off is not overruled, and the
+    diagnosis reads the same key back and says which it is. True when the
+    file was written.
+    """
+    p = Path(game_dir) / "ReShade.ini"
+    ini = Ini.load(p)
+    for name, kv in ini.sections:
+        if name.lower() == ADDON_SECTION.lower():
+            if any(k.lower() == ADDON_SWITCH.lower() for k, _ in kv):
+                return False          # their choice, whichever way it went
+            break
+    ini.set_default(ADDON_SECTION, ADDON_SWITCH, "1")
+    ini.save(p)
+    return True
 
 
 def enable_renodx_dlss_nr(game_dir: Path) -> None:

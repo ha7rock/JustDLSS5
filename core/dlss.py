@@ -953,41 +953,87 @@ def quirks(exe, api: str = "") -> tuple[str, ...]:
 # when it does. Short and honest: these are the conflicts people actually
 # hit, not a legal disclaimer. ReShade loads every .addon64 it finds, and
 # two things hooking the same NGX calls means flicker or nothing at all.
-CONFLICTS: dict[str, tuple[str, ...]] = {
-    NATIVE: ("not with OptiScaler or a frame-gen unlocker in the same folder "
-             "- two NGX hooks: flicker, greyed-out frame-gen or nothing",
+# Each line is (kind, text):
+#   "folder" - something that must not be in the game folder. The tool looks
+#              before it says it, and names the file when it is there; a
+#              clean folder is not told about it every time.
+#   "ingame" - a setting the person has to change in the game. Nothing can
+#              check that, so it is always on screen.
+#   "note"   - what the route does. Read once, then in the way.
+CONFLICTS: dict[str, tuple[tuple[str, str], ...]] = {
+    NATIVE: (
+        ("folder",
+             "not with OptiScaler or a frame-gen unlocker in the same folder "
+             "- two NGX hooks: flicker, greyed-out frame-gen or nothing"),
+        ("ingame",
              "NVIDIA Smooth Motion off for this game"),
-    UPSTREAM: ("not with the renodx-dlss5 add-on, OptiScaler or another NGX "
-               "hook in the folder - installing removes ours, name theirs",
-               "with DLSS Frame Generation set its cadence to Quality in the "
-               "overlay, or expect stutter",
-               "does not upscale - the game's own DLSS still does"),
-    OPTI: ("no ReShade at all on this route; other RenoDX add-ons will not load",
-           "the game must already use DLSS, FSR 2/3 or XeSS",
-           "not with a frame-gen unlocker or dlss-enabler in the folder",
-           "frame generation (tick below, D3D12): the game's own frame "
-           "generation must be OFF"),
-    BRIDGE: ("not with the feeder or renodx-dlss add-on in the same folder "
-             "- both build a contract and the game dies before its swap chain",
-             "NVIDIA Smooth Motion off for this game",
+    ),
+    UPSTREAM: (
+        ("folder",
+             "not with the renodx-dlss5 add-on, OptiScaler or another NGX "
+             "hook in the folder - installing removes ours, name theirs"),
+        ("ingame",
+             "with DLSS Frame Generation set its cadence to Quality in the "
+             "overlay, or expect stutter"),
+        ("note",
+             "does not upscale - the game's own DLSS still does"),
+    ),
+    OPTI: (
+        ("folder",
+             "no ReShade at all on this route; other RenoDX add-ons will not load"),
+        ("note",
+             "the game must already use DLSS, FSR 2/3 or XeSS"),
+        ("folder",
+             "not with a frame-gen unlocker or dlss-enabler in the folder"),
+        ("ingame",
+             "frame generation (tick below, D3D12): the game's own frame "
+             "generation must be OFF"),
+    ),
+    BRIDGE: (
+        ("folder",
+             "not with the feeder or renodx-dlss add-on in the same folder "
+             "- both build a contract and the game dies before its swap chain"),
+        ("ingame",
+             "NVIDIA Smooth Motion off for this game"),
+        ("note",
              "an older dlss5-dx11-bridge.addon64 is removed - the two conflict"),
-    FEEDER: ("always DLAA; the game's own DLSS is ignored",
-             "NVIDIA Smooth Motion off",
+    ),
+    FEEDER: (
+        ("note",
+             "always DLAA; the game's own DLSS is ignored"),
+        ("ingame",
+             "NVIDIA Smooth Motion off"),
+        ("folder",
              "not with the bridge or renodx-dlss add-on in the same folder"),
-    RENODX: ("not with the renodx-dlss5 add-on, the feeder or the bridge in "
-             "the folder - they all hook NGX",
+    ),
+    RENODX: (
+        ("folder",
+             "not with the renodx-dlss5 add-on, the feeder or the bridge in "
+             "the folder - they all hook NGX"),
+        ("note",
              "reported not working in many games; nothing to tune if it does "
              "nothing, switch route"),
-    STANDALONE: ("the game's own DLSS, frame generation and anti-aliasing "
-                 "must be OFF - it brings its own",
-                 "presents through its own topmost window; resolution or "
-                 "display-mode changes need a restart",
-                 "not with the renodx add-on, OptiScaler or neural-upstream "
-                 "in the folder"),
-    REMIX: ("no ReShade, no feeder, no add-ons in the folder - a ReShade "
-            "proxy DLL crashes a Remix game before it draws",
-            "the neural pass runs inside the Remix runtime, after DLSS, so "
-            "the game's own DLSS/RR settings still apply",
-            "toggle it in the Remix menu: Alt+X -> Developer Settings Menu "
-            "-> Post-Processing"),
+    ),
+    STANDALONE: (
+        ("ingame",
+             "the game's own DLSS, frame generation and anti-aliasing "
+             "must be OFF - it brings its own"),
+        ("note",
+             "presents through its own topmost window; resolution or "
+             "display-mode changes need a restart"),
+        ("folder",
+             "not with the renodx add-on, OptiScaler or neural-upstream "
+             "in the folder"),
+    ),
+    REMIX: (
+        ("folder",
+             "no ReShade, no feeder, no add-ons in the folder - a ReShade "
+             "proxy DLL crashes a Remix game before it draws"),
+        ("note",
+             "the neural pass runs inside the Remix runtime, after DLSS, so "
+             "the game's own DLSS/RR settings still apply"),
+        ("ingame",
+             "toggle it in the Remix menu: Alt+X -> Developer Settings Menu "
+             "-> Post-Processing"),
+    ),
 }

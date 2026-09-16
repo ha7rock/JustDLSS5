@@ -8,6 +8,17 @@ import re
 
 
 _MESSAGES = r"""
+Nothing is installed in this folder - install first.|此目录尚未安装组件，请先安装。
+Nothing of this tool is in this folder.|此目录没有本工具的组件。
+The add-on has written no settings of its own yet.|插件尚未生成自身设置。
+The add-on's own switch is on.|插件的神经渲染开关已开启。
+The install crashed before it finished - install again.|安装因异常中断，请检查原因后重试。
+The install record is gone from this folder.|此目录缺少安装记录。
+The install stopped with an error before it wrote anything.|安装在写入文件前发生错误。
+The motion-vector shader was removed after the install - install again.|安装后运动矢量着色器被移除，请重新安装。
+The neural pass is switched OFF in the add-on itself.|插件内的神经渲染开关已关闭。
+The swapped Remix runtime is the first suspect - uninstall puts the mod's own back.|请优先排查替换的 Remix 运行时；卸载可恢复 Mod 原有版本。
+This install swapped the mod's own Remix runtime.|本次安装替换了 Mod 自带的 Remix 运行时。
 The install stopped because the drive was full.|磁盘空间不足，安装已中止。
 The install was stopped before it finished.|安装未完成，已中止。
 The add-on loaded - it wrote its own log in the session this report reads.|本次运行中插件已加载，并写入了日志。

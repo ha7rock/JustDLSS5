@@ -74,6 +74,8 @@ QCheckBox::indicator:checked { background: #14171b; border: 1px solid #b6e477; b
 QCheckBox::indicator:hover { border-color: #c7eca1; }
 QCheckBox::indicator:disabled { border-color: #454d57; background: #1b1e23; }
 QToolButton { color: #b7c0cd; border: none; padding: 10px 0; text-align: left; }
+QToolButton#contextHelp { color: #929aa6; background: transparent; border: 1px solid #414953; border-radius: 8px; padding: 0; text-align: center; font-size: 10px; }
+QToolButton#contextHelp:hover { color: #e2f5c8; border-color: #b6e477; background: #293223; }
 QMenu { background: #20252c; border: 1px solid #3c4551; padding: 6px; }
 QMenu::item { padding: 8px 18px; border-radius: 4px; }
 QMenu::item:selected { background: #37432e; }

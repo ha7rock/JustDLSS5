@@ -192,7 +192,11 @@ class BackendService:
     def community_report(self, entry, route):
         from .backend import community
         data = community.fetch()
-        lines = community.advice(community.for_game(data, entry.game), route, gpu.driver_version() or "")
+        game_data = community.for_game(data, entry.game)
+        lines = community.advice(game_data, route, gpu.driver_version() or "")
+        measured = community.measured_note(game_data, route)
+        if measured:
+            lines.append(measured)
         return "来源 / Source: DLSS5-Autopilot community reports\n\n" + "\n".join(lines or [
             "暂无足够的社区记录（至少 5 份）；这不代表兼容。 / Insufficient reports (minimum 5); compatibility is unknown."])
 
