@@ -17,5 +17,19 @@
 
 ## 验证与发布
 
-状态：接入与验证进行中；最终提交、CI、摘要和发布结果在本文件补记。
+状态：已完成接入、验证与玩家测试版发布，详见下方执行结果。
 离线测试不能确认自动试装在真实游戏中的稳定性；无 GPU/VR 实测声明。
+
+### 本次执行结果（2026-09-16 自动触发）
+
+- 固定提交接入完成；115 项接口检查、107 项本地回归、INI 检查和 Windows 打包启动通过。
+- GitHub Windows CI 完成依赖安装、回归、构建、启动、许可及对应源码准备：https://github.com/ha7rock/JustDLSS5/actions/runs/35046835805
+- 附件摘要、BUILD-INFO 提交、工作流 ID、包内许可校验通过：https://github.com/ha7rock/JustDLSS5/actions/runs/35047034591
+- 维护 PR #6 已合并；构建与发行标签对应 baa666e85a00ca2e89520ef53f708fa1227ec435。
+- 已发布 v0.2.13（非草稿，prerelease）：https://github.com/ha7rock/JustDLSS5/releases/tag/v0.2.13
+- Windows ZIP SHA-256：96bc991f62e2b453c101e05d820d6ee93d0f5aad9429e51f94ab3a0e34edbe27
+- 源码 ZIP SHA-256：e382ab72f551a9ff1ee09ebf393b3da57b217fbc9a1f2711b7eb82ad4f610d62
+- README 中英文入口与启动器已指向 0.2.13。游戏库 PR #5 未合并，原开发目录未覆盖。
+- 未执行真实游戏安装、自动路线试装或 VR 实测，发行说明已明确。
+
+本次维护执行已结束，无待完成的发布步骤。保留日程，不将本次维护视为后续普通对话的当前任务。
