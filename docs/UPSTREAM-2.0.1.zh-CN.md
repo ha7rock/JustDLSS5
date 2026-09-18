@@ -27,4 +27,21 @@
 
 ## 验证与发布
 
-执行中：接口检查 128 项、原有 107 项回归、新增 9 项维护测试及 INI 检查通过。后续完成 Windows 构建、CI、发行摘要核对后在下方记录最终结果。
+已完成接入、验证和玩家测试版发布。接口检查 128 项、原有 107 项回归、新增 9 项维护测试及 INI 检查通过。
+
+
+### 本次执行结果（2026-09-18 自动触发）
+
+- 固定上游提交完整接入；更新脚本已纳入新增测试，再次 dry-run 通过。
+- 本地 Windows 程序启动通过；新增中文管理界面离屏排版检查通过。
+- 最终候选提交：fd1f02b6e3254c8458accb9bcc26b9ad77eb888c。
+- GitHub Windows CI：116 项离线回归、INI 检查、接口检查、构建、程序启动、许可与对应源码准备全部通过：https://github.com/ha7rock/JustDLSS5/actions/runs/35327886125
+- 附件摘要、包内许可、BUILD-INFO 提交与工作流 ID 校验通过：https://github.com/ha7rock/JustDLSS5/actions/runs/35328166334
+- PR #7 已合并，合并后文件树与通过检查的候选一致：https://github.com/ha7rock/JustDLSS5/pull/7
+- v0.2.14 已于 2026-09-18T09:12:53Z 发布；非草稿、prerelease，四份附件齐全：https://github.com/ha7rock/JustDLSS5/releases/tag/v0.2.14
+- Windows ZIP SHA-256：c74d503c020ac788dbf1248e79dd12b92d374ef03dd353658a427b7bbeae02b3
+- 源码 ZIP SHA-256：36fdb950321dbdfa6d84d948246f1b6003441c1ada08eafa111ec362ecfba6f8
+- README 中英文版本与下载入口、启动器已更新。游戏库 PR #5 仍独立，未覆盖原开发目录和用户修改。
+- 未运行真实游戏安装、卸载、自动试装或 VR 实测；发行说明明确其验证限制。
+
+本次维护执行已结束，无待完成的发布步骤。保留日程，不将维护任务混入后续普通对话。
