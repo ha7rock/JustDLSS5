@@ -36,7 +36,7 @@ ROOT = Path(''' + repr(str(ROOT)) + ''')
 a = Analysis([str(ROOT / "autopilot_desktop.py")], pathex=[str(ROOT)],
     binaries=[], datas=[(str(ROOT / "docs/MAINTAINING.zh-CN.md"), "docs"), (str(ROOT / "frontend/chevron.svg"), "frontend"), (str(ROOT / "frontend/check.svg"), "frontend"), (str(ROOT / "frontend/justdlss5.ico"), "frontend")],
     hiddenimports=["certifi"], hookspath=[], runtime_hooks=[],
-    excludes=["tkinter", "core.gui", "core.compareui", "core.remixui"], noarchive=False)
+    excludes=["tkinter", "core.ui", "core.gui", "core.compareui", "core.remixui"], noarchive=False)
 a.datas += [(dest + "/" + Path(source).name, source, "DATA") for source, dest in collect_data_files("certifi")
             if not any(item[0] == dest + "/" + Path(source).name for item in a.datas)]
 # Some development runtimes augment DLL search even after PATH is sanitized.
