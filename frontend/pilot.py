@@ -4,7 +4,7 @@ from threading import Event
 
 from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPlainTextEdit, QProgressBar
 from PySide6.QtCore import Qt
-from .backend import anticheat, autopilot, dlss, installer
+from .backend import anticheat, autopilot, community, dlss, installer
 from .controls import Button
 from .jobs import Jobs
 
@@ -21,7 +21,8 @@ def prepare(entry, options, inspection):
     offered = [r for r in inspection.support.options if inspection.fit.get(r, (False, ""))[0]]
     if options.path not in offered:
         raise ValueError("当前路线不可用。 / The selected route is unavailable.")
-    routes = autopilot.plan(options.path, offered)
+    data = community.fetch()
+    routes = autopilot.plan(options.path, offered, data=data, game=game)
     choices = {}
     for route in routes:
         choices[route] = replace(options, path=route,
@@ -30,7 +31,11 @@ def prepare(entry, options, inspection):
             vr=False, remix_swap=options.remix_swap and route == dlss.REMIX,
             renodx=options.renodx if (route == dlss.RENODX) == (options.path == dlss.RENODX) else None,
             renodx_local=options.renodx_local if (route == dlss.RENODX) == (options.path == dlss.RENODX) else None)
-    return routes, choices, autopilot.may_start(game)
+    allowed, note = autopilot.may_start(game)
+    reasons = [f"{route}: {why}" for route, why in autopilot.plan_reasons(routes, data, game) if why]
+    if reasons:
+        note += "\n\n社区排序依据 / Community ranking:\n" + "\n".join(reasons)
+    return routes, choices, (allowed, note)
 
 
 def run(entry, plan, stop, emit):

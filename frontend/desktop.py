@@ -3,6 +3,7 @@ from dataclasses import replace
 from pathlib import Path
 import sys
 import time
+from queue import SimpleQueue
 
 from PySide6.QtCore import Qt, QTimer, QUrl, QSize
 from PySide6.QtGui import QDesktopServices, QFont, QIcon, QPixmap, QPainter, QColor, QPen, QKeySequence, QShortcut
@@ -171,7 +172,17 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(STYLES)
         self.app_icon = QIcon(str(Path(__file__).with_name("justdlss5.ico")))
         self.setWindowIcon(self.app_icon)
+        self.watch_events = SimpleQueue()
+        self.watcher = None
+        self.watch_result = None
+        self.watch_generation = 0
+        self.watch_background = background
         self._build()
+        self.watch_timer = QTimer(self)
+        self.watch_timer.setInterval(1000)
+        self.watch_timer.timeout.connect(self._watch_tick)
+        if background:
+            self.watch_timer.start()
         self.search_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
         self.search_shortcut.activated.connect(self.focus_search)
         if background:
@@ -733,6 +744,7 @@ class MainWindow(QMainWindow):
         self.selection_generation += 1
         self.detail_stack.setCurrentIndex(0)
         self.model.replace(entries)
+        self._watch_refresh()
         self._filter()
         self.navigate(0)
 
@@ -747,6 +759,7 @@ class MainWindow(QMainWindow):
     def _added(self, entry):
         entries = [e for e in self.model.entries if e.key != entry.key] + [entry]
         self.model.replace(entries)
+        self._watch_refresh()
         self.search.clear()
         self.installed_filter.setCurrentIndex(0)
         self.arch_filter.setCurrentIndex(0)
@@ -1096,10 +1109,93 @@ class MainWindow(QMainWindow):
                                 (self.t("打开游戏文件夹", "Open game folder"), lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.current.game.folder))))):
             menu.addAction(title, callback)
         menu.addAction(self.t("自动尝试路线（实验性）", "Automatic route trials (experimental)"), self.automatic_trials)
+        menu.addAction(self.t("更新 / 还原 DLSS 文件", "Update / restore DLSS files"), self.manage_runtimes)
+        menu.addAction(self.t("还原 Remix 模组安装", "Restore Remix mod installation"), self.remove_remix)
         menu.addSeparator()
         action = menu.addAction(self.t("卸载增强组件", "Uninstall components"), self.uninstall_selected)
         action.setEnabled(self.current.installed)
         menu.exec(self.more_button.mapToGlobal(self.more_button.rect().bottomLeft()))
+
+    def _watch_refresh(self):
+        if not self.watch_background or not self.watch_check.isChecked():
+            return
+        from .backend import lookout
+        if self.watcher is None:
+            self.watcher = lookout.Lookout(self.watch_events.put)
+        self.watch_generation += 1
+        generation = self.watch_generation
+        watcher = self.watcher
+        games = [entry.game for entry in self.model.entries]
+        def ready(count):
+            if self.watch_check.isChecked() and generation == self.watch_generation:
+                watcher.start()
+        self._submit(lambda emit: watcher.set_games(games), ready)
+
+    def _watch_changed(self, enabled):
+        prefs.set_("studio_watch_sessions", enabled)
+        self.watch_generation += 1
+        if not enabled:
+            if self.watcher:
+                self.watcher.stop()
+            while not self.watch_events.empty():
+                self.watch_events.get()
+        else:
+            self._watch_refresh()
+
+    def _watch_tick(self):
+        if not self.watch_check.isChecked() or self.jobs.active or QApplication.activeModalWidget():
+            return
+        while not self.watch_events.empty():
+            kind, folder, value = self.watch_events.get()
+            if kind != "closed":
+                continue
+            entry = next((e for e in self.model.entries if e.game.install_dir == folder), None)
+            if entry:
+                def ready(result, name=entry.game.name):
+                    self.watch_result = (name, result)
+                    self.watch_report_button.setEnabled(True)
+                    self.status.setText(self.t(f"{name} 已退出；可在设置中查看运行检查。", f"{name} closed. View the session check in Settings."))
+                    self._append_log(name + "\n" + result.text)
+                self._submit(lambda emit, e=entry: self.service.diagnose(e), ready, busy=True,
+                             title=self.t("正在检查本次运行…", "Checking the last session…"))
+                break
+
+    def show_watch_report(self):
+        if self.watch_result:
+            name, result = self.watch_result
+            DiagnosticDialog(result, name, self.chinese, self).exec()
+
+    def manage_runtimes(self):
+        if self.current and not self.busy_job:
+            from .runtime_tools import RuntimeDialog
+            dialog = RuntimeDialog(self.current.game, self.chinese, self)
+            dialog.exec()
+            dialog.deleteLater()
+
+    def remove_remix(self):
+        if not self.current or self.busy_job:
+            return
+        from .runtime_tools import remove_remix
+        game = self.current.game
+        def ready(record):
+            if not record:
+                self.show_text("RTX Remix", self.t("没有本工具安装的模组记录。", "No mod installation record from this tool."))
+                return
+            if QMessageBox.question(self, "RTX Remix", game.name + "\n\n" + self.t(
+                "还原本工具安装模组时的备份并移除其文件？请先关闭游戏。此操作不会卸载 DLSS 5 组件。",
+                "Restore the mod backups and remove its files? Close the game first. This does not uninstall DLSS 5 components.")) != QMessageBox.StandardButton.Yes:
+                return
+            self._submit(lambda emit: remove_remix(game, emit), lambda messages: self.show_text("RTX Remix", "\n".join(messages) or self.t("还原完成，请重新扫描。", "Restored. Rescan the library.")), busy=True,
+                         title=self.t("正在还原 Remix 模组…", "Restoring Remix mod…"))
+        self._submit(lambda emit: remixdl.installed(game.install_dir), ready, busy=True,
+                     title=self.t("正在检查模组记录…", "Checking mod record…"))
+
+    def manage_openxr(self):
+        if not self.busy_job:
+            from .runtime_tools import OpenXRDialog
+            dialog = OpenXRDialog(self.chinese, self)
+            dialog.exec()
+            dialog.deleteLater()
 
     def automatic_trials(self):
         if not self.current or not self.inspection or self.busy_job:
@@ -1138,18 +1234,19 @@ class MainWindow(QMainWindow):
             layout.addWidget(label(entry.game.name, "subheading", True))
             layout.addWidget(label(self.t("仅检查版本，不会安装或替换文件。", "This check does not install or replace files."), "muted", True))
             from PySide6.QtWidgets import QTableWidget, QTableWidgetItem
-            table = QTableWidget(len(items), 3)
-            table.setHorizontalHeaderLabels([self.t("组件", "Component"), self.t("已安装", "Installed"), self.t("最新可用", "Latest available")])
+            table = QTableWidget(len(items), 4)
+            table.setHorizontalHeaderLabels([self.t("组件", "Component"), self.t("已安装", "Installed"), self.t("最新可用", "Latest available"), self.t("说明", "Notes")])
             table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
             table.verticalHeader().hide()
             table.horizontalHeader().setMinimumSectionSize(50)
             table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
             for index, item in enumerate(items):
-                for col, value in enumerate((item.name, item.installed or self.t("未检测到", "Not detected"), item.latest or self.t("未知", "Unknown"))):
+                for col, value in enumerate((item.name, item.installed or self.t("未检测到", "Not detected"), item.latest or self.t("未知", "Unknown"), (self.t("旧版安装使用了不同的 OptiScaler 包，请重新安装组件。", "The older installation used a different OptiScaler package. Reinstall components.") if item.note and item.name == "OptiScaler" else item.note))):
                     cell = QTableWidgetItem(value)
                     cell.setToolTip(value)
                     table.setItem(index, col, cell)
+            table.resizeRowsToContents()
             layout.addWidget(table)
             if not items:
                 layout.addWidget(label(self.t("未检测到可检查的组件。", "No components available to check."), "muted", True))
@@ -1322,6 +1419,15 @@ class MainWindow(QMainWindow):
         self.overlay_combo.activated.connect(lambda _: prefs.set_("overlay_key", self.overlay_combo.currentData()))
         layout.addWidget(self.overlay_combo)
         layout.addWidget(label(self.t("重新安装组件后生效。", "Takes effect after reinstalling components."), "muted"))
+        self.watch_check = QCheckBox(self.t("游戏退出后检查运行结果", "Check sessions after games close"))
+        self.watch_check.setChecked(bool(prefs.get("studio_watch_sessions", False)))
+        self.watch_check.toggled.connect(self._watch_changed)
+        layout.addWidget(self.watch_check)
+        layout.addWidget(label(self.t("仅在本应用打开时读取已安装游戏的进程和组件记录，不会启动游戏或安装组件。", "While this app is open, reads process and component records for installed games. Does not launch games or install components."), "muted", True))
+        self.watch_report_button = button(self.t("查看最近运行检查", "View last session check"), self.show_watch_report)
+        self.watch_report_button.setEnabled(self.watch_result is not None)
+        layout.addWidget(self.watch_report_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(button(self.t("OpenXR 注册管理", "OpenXR registration"), self.manage_openxr), alignment=Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(label(self.t("维护", "MAINTENANCE"), "eyebrow"))
         layout.addWidget(button(self.t("重新安装所有游戏的组件", "Reinstall components for all games"), self.update_all), alignment=Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(label(self.t("窗口大小自动保存。Ctrl+F 搜索游戏。拖动游戏列表与设置之间的分隔线可调整空间。", "Window size is remembered. Ctrl+F focuses search. Drag the divider to adjust library and setup widths."), "muted", True))
@@ -1587,6 +1693,9 @@ class MainWindow(QMainWindow):
             return
         prefs.set_("studio_window", [self.width(), self.height()])
         prefs.set_("studio_window_layout", 1)
+        self.watch_timer.stop()
+        if self.watcher:
+            self.watcher.stop()
         self.jobs.shutdown()
         video.stop_webcam()
         event.accept()

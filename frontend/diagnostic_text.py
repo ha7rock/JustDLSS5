@@ -8,6 +8,9 @@ import re
 
 
 _MESSAGES = r"""
+Frames reach the 64-bit helper, and only its own log says what came back - look in host64\dlss5-feed-host.log.|画面已传入 64 位辅助程序，请查看 host64\dlss5-feed-host.log 确认处理结果。
+The 32-bit Vulkan layer is being discarded as a duplicate name - install again to rewrite it.|32 位 Vulkan 层因名称重复被忽略，请重新安装组件修复。
+The neural add-on in the helper never created the DLSS 5 feature.|辅助程序中的神经渲染插件未创建 DLSS 5 功能。
 Nothing is installed in this folder - install first.|此目录尚未安装组件，请先安装。
 Nothing of this tool is in this folder.|此目录没有本工具的组件。
 The add-on has written no settings of its own yet.|插件尚未生成自身设置。
