@@ -126,7 +126,7 @@ _UPSCALER_SKIP = ("optiscaler", "licenses")
 # walk is the expensive part of detection and the game's own runtimes do
 # not move while the tool is open, so asking twice is waste. Cleared by
 # forget_walk() after an install writes into the folder.
-_WALK_CACHE: dict[tuple[str, str], list[str]] = {}
+_WALK_CACHE: dict[tuple, list[str]] = {}
 
 
 def forget_walk(folder=None) -> None:
@@ -135,7 +135,9 @@ def forget_walk(folder=None) -> None:
         _WALK_CACHE.clear()
         return
     key = _walk_key(folder)
-    for k in [k for k in _WALK_CACHE if k[0] == key]:
+    # list() copies the keys in one step: a scan or preview worker adding a
+    # walk while this runs made the comprehension raise mid-iteration
+    for k in [k for k in list(_WALK_CACHE) if k[0] == key]:
         _WALK_CACHE.pop(k, None)
 
 
@@ -152,12 +154,20 @@ def _walk_key(p) -> str:
         return str(p).lower()
 
 
-def walked(folder: Path, skip_dir: Path | None = None) -> list[str]:
-    """find_dlss_files, remembered for as long as the program runs."""
-    key = (_walk_key(folder), _walk_key(skip_dir) if skip_dir else "")
+def walked(folder: Path, skip_dir: Path | None = None,
+           names: tuple[str, ...] = DLSS_FILES) -> list[str]:
+    """find_dlss_files, remembered for as long as the program runs.
+
+    `names` is part of the key: the walk stops after six matches, so a
+    six-name search and a one-name search are not the same question and
+    must not share an answer. Asking for one name can find a runtime that
+    the five-name walk spent its budget before reaching.
+    """
+    key = (_walk_key(folder), _walk_key(skip_dir) if skip_dir else "",
+           tuple(names))
     hit = _WALK_CACHE.get(key)
     if hit is None:
-        hit = find_dlss_files(folder, skip_dir=skip_dir)
+        hit = find_dlss_files(folder, skip_dir=skip_dir, names=names)
         try:
             Path(folder).resolve()
             reachable = True
@@ -279,7 +289,7 @@ class Support:
     evidence: list[str] = None            # type: ignore[assignment]
     recommended: str = FEEDER
     # Set by _driver_steer when the driver moved the recommendation off a
-    # route that loads renodx-dlss5: the route it moved off. The games page
+    # route that loads renodx-dlss5: the route it moved off. The library
     # reads it, so "standalone [experimental]" does not appear there with no
     # reason beside it.
     steered_from: str = ""
@@ -304,8 +314,40 @@ class Support:
             self.upscaler_evidence = []
 
 
+# Files that only a DLSS 5 install puts in a game folder. Their presence
+# says the nvngx runtimes beside them arrived with that install - whether it
+# was this tool, a half-removed one of ours, or a hand-made setup. No game
+# ever shipped any of these.
+DLSS5_MARKERS = ("dlss5-feed.addon64", "dlss5-feed.addon32", "dlss5-feed.cfg",
+                 "dlss5-bridge.addon64", "dlss5-bridge.cfg",
+                 "standalone-dlssnr.addon64", "renodx-dlss5.addon64",
+                 "nvngx_dlssnr.dll")
+
+
+def _dlss5_install_here(folder: Path) -> bool:
+    """Does this folder plainly carry a DLSS 5 install, record or no record?"""
+    from . import installer
+    if (folder / installer.MANIFEST).is_file():
+        return True
+    for name in DLSS5_MARKERS:
+        if (folder / name).is_file():
+            return True
+    return (folder / installer.HOST_DIR).is_dir()
+
+
 def _ours(folder: Path, name: str) -> bool:
-    """Is this file one we installed, rather than the game's own?"""
+    """Is this file one we installed, rather than the game's own?
+
+    Three signals, in order of how sure each one is: the game's own copy
+    kept beside it as a backup, our install record, and - for the case that
+    has neither - the unmistakable files of a DLSS 5 install in the same
+    folder. That last one is here because a removed or half-finished
+    install leaves the runtimes and takes the record with it, and then our
+    own nvngx_dlss.dll was read back as proof the GAME shipped DLSS: it sent
+    MGS V, a 2015 game with no DLSS at all, down a route meant for games
+    that have it. "Own files are never game evidence" - including through
+    the door a missing record leaves open.
+    """
     from . import installer
     if (folder / (name + installer.BACKUP_SUFFIX)).is_file():
         return True                       # we replaced the game's copy
@@ -317,7 +359,9 @@ def _ours(folder: Path, name: str) -> bool:
             return name in data.get("files", [])
         except Exception:
             return False
-    return False
+    # no record: an NGX runtime standing in a folder that carries a DLSS 5
+    # install is that install's, not the game's
+    return name.lower().startswith("nvngx_") and _dlss5_install_here(folder)
 
 
 def detect(install_dir: Path, folder: Path, api: str, bitness: int,
@@ -358,11 +402,11 @@ def detect(install_dir: Path, folder: Path, api: str, bitness: int,
                     f"neural rendering, with the model-resolution dial. "
                     f"Works in many games, not all - the feeder is the proven "
                     f"fallback.")
-    _driver_steer(s, driver)
+    _driver_steer(s, driver, folder, install_dir)
     return s
 
 
-def _driver_steer(s: Support, driver: str | None) -> None:
+def _driver_steer(s: Support, driver: str | None, folder=None, install_dir=None) -> None:
     """On 616.64 and newer, off the routes that load renodx-dlss5.
 
     Every route in _RENODX_ROUTES reaches NVIDIA's runtime through the
@@ -396,6 +440,15 @@ def _driver_steer(s: Support, driver: str | None) -> None:
         return
     if not gpu.driver_at_least(sources.DRIVER_FAULT_MIN, driver):
         return
+    # Nor is a game that closes itself the moment ReShade hooks it: those
+    # reach DLSS 5 only through DXVK, and the standalone route does not go
+    # that way (installer.uses_dxvk leaves it out). Steering MGS V there
+    # named the one route that cannot work in that game.
+    from . import dxvk as _dxvk
+    for _name in _dxvk.NEEDS_DXVK:
+        for _where in (folder, install_dir):
+            if _where is not None and (_where / _name).is_file():
+                return
     was = LABELS.get(s.recommended, s.recommended).split(" - ")[0]
     s.steered_from = s.recommended
     s.recommended = STANDALONE
@@ -551,7 +604,11 @@ def _detect_routes(install_dir: Path, folder: Path, api: str,
                 s.native_dlss = True
                 s.evidence.append(m)
         # A plain nvngx_dlss.dll counts only when we did not put it there.
-        if (d / "nvngx_dlss.dll").is_file() and not _ours(d, "nvngx_dlss.dll"):
+        # _theirs: a swap leaves the game's own beside it as a backup, and
+        # that proves the game shipped DLSS even though the file on disk is
+        # ours now - read as "no DLSS", a swapped game lost its routes and
+        # the reinstall that should swap again (gate 1.9.1).
+        if (d / "nvngx_dlss.dll").is_file() and _theirs(d, "nvngx_dlss.dll"):
             s.native_dlss = True
             s.evidence.append("nvngx_dlss.dll")
         # The other two runtimes are evidence in their own right, and the
@@ -986,7 +1043,7 @@ CONFLICTS: dict[str, tuple[tuple[str, str], ...]] = {
         ("folder",
              "not with a frame-gen unlocker or dlss-enabler in the folder"),
         ("ingame",
-             "frame generation (tick below, D3D12): the game's own frame "
+             "with 'frame generation' on (D3D12): the game's own frame "
              "generation must be OFF"),
     ),
     BRIDGE: (

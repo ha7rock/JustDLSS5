@@ -19,7 +19,7 @@ class PilotTests(unittest.TestCase):
         item=entry('Control');item.game.api='DX12'
         options=installer.Options(path=dlss.OPTI,fg=True,mfg=True)
         inspection=NS(support=NS(options=[dlss.OPTI,dlss.FEEDER]),fit={dlss.OPTI:(True,''),dlss.FEEDER:(True,'')},mfg_available=True)
-        with patch.object(installer,'check_supported',return_value=(True,'')), patch.object(pilot.anticheat,'detect',return_value=NS(present=False)), patch.object(pilot.autopilot,'plan',return_value=[dlss.OPTI,dlss.FEEDER]), patch.object(pilot.autopilot,'may_start',return_value=(True,'')):
+        with patch.object(installer,'check_supported',return_value=(True,'')), patch.object(pilot.anticheat,'detect',return_value=NS(present=False)), patch.object(pilot.autopilot,'plan',return_value=[dlss.OPTI,dlss.FEEDER]), patch.object(pilot.autopilot,'may_start',return_value=(True,'')), patch.object(pilot.community,'fetch',return_value={}):
             _,choices,_=pilot.prepare(item,options,inspection)
         self.assertTrue(choices[dlss.OPTI].fg)
         self.assertFalse(choices[dlss.FEEDER].fg)

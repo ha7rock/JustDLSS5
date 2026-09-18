@@ -194,6 +194,10 @@ class BackendService:
         data = community.fetch()
         game_data = community.for_game(data, entry.game)
         lines = community.advice(game_data, route, gpu.driver_version() or "")
+        counts = (game_data or {}).get("routes", {}).get(route)
+        if counts:
+            successes, total = community.rate(counts)
+            lines.insert(0, f"该游戏该路线的报告：{successes}/{total} 成功（社区自报，不代表兼容保证）。 / This game and route: {successes}/{total} successful reports (self-reported, not a compatibility guarantee).")
         measured = community.measured_note(game_data, route)
         if measured:
             lines.append(measured)

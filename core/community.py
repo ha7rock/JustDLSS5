@@ -13,8 +13,8 @@ How it works, with no server anywhere:
   readable block and nothing that identifies them: the game's name and
   executable, the route, the build, the graphics API, the card's model and
   architecture, the driver, this tool's version, the outcome, and - where
-  the session was measured - the work area it ran at, what the model cost
-  a frame and the frame rate. No paths, no user name,
+  the session was measured - the work area it ran at, the milliseconds a frame
+  spent on what grows with that area, and the frame rate. No paths, no user name,
   no machine id, and nothing at all leaves without the button being pressed.
 * A workflow in the repository adds those up into `docs/compatibility.json`.
 * Every tool downloads that file and reads it before an install.
@@ -54,7 +54,8 @@ def record(game, route: str, result: str, *, api: str = "", build: str = "",
     """The one block a shared result carries. Nothing identifying in it.
 
     `measured` is what the session cost - the work area it ran at, the
-    model's cost a frame, the frame rate - as autotune.shared() returns
+    milliseconds a frame spent on what grows with that area, the frame
+    rate - as autotune.shared() returns
     it. Three numbers about a game, and nothing about a machine beyond
     the card that is named here anyway. The keys are taken one at a time
     rather than merged wholesale, so a future caller cannot widen what
@@ -244,7 +245,14 @@ def measured_note(entry: dict | None, route: str = "") -> str:
                 and not isinstance(v, bool) and v else None)
 
     ms, fps = number("ms"), number("fps")
-    if ms:
+    if ms and name == "feeder":
+        # The feeder logs no model cost. Its number is solved from frame
+        # rates at two work areas, so it is everything that grows with the
+        # area - the model, the feed and its shaders - and only an upper
+        # bound on the model's own share.
+        line += (f". The model and the feed together cost about {ms:.1f} ms "
+                 f"a frame there")
+    elif ms:
         line += f". The model cost about {ms:.1f} ms a frame there"
     if fps:
         line += f", at around {fps:.0f} fps"
@@ -307,6 +315,72 @@ def driver_note(data: dict, driver: str) -> str:
     return line
 
 
+def confidence(worked: int, tried: int) -> float:
+    """How much a rate is worth, given how few results are behind it.
+
+    The lower end of a 95% Wilson interval. Two people out of two is a
+    higher rate than nine out of twelve and a worse bet, and sorting on the
+    plain rate put the two in front - "one person's machine, said as if it
+    were a setting for the game", which this module already refuses to do
+    elsewhere. Same arithmetic, one place.
+    """
+    if tried <= 0:
+        return 0.0
+    worked = max(0, min(int(worked), int(tried)))    # a hand-edited file can
+    tried = int(tried)                               # say 10 of 1, and did
+    z = 1.96
+    phat = worked / tried
+    denom = 1 + z * z / tried
+    centre = phat + z * z / (2 * tried)
+    spread = z * ((phat * (1 - phat) / tried + z * z / (4 * tried * tried)) ** 0.5)
+    return max(0.0, (centre - spread) / denom)
+
+
+def rank_routes(data: dict, game, offer: list[str] | None = None) -> list[tuple[str, str]]:
+    """`offer`, ordered by what other people's results say, best first, each
+    with the counts that put it there ("" for a route nobody has reported).
+
+    What the autopilot needs is not a sentence, it is an order: it installs
+    one route, tests it, and goes on to the next. Until now that next one
+    was whatever the dropdown happened to list next, with a single route
+    promoted by matching a sentence written for a person to read. This
+    answers the question directly, and in the same order of evidence the
+    rest of this module uses:
+
+      1. what happened to THIS game, for anybody who reported it;
+      2. what happened to that route across every game, once there are
+         enough reports to mean anything (MIN_REPORTS);
+      3. the order it was offered in, for everything nobody has tried.
+
+    It never drops a route and never adds one: the same names come back.
+    """
+    entry = for_game(data, game) or {}
+    here = entry.get("routes") or {}
+    everywhere = (totals(data) or {}).get("routes") or {}
+    scored = []
+    for i, name in enumerate(offer or []):
+        w, n = rate(here.get(name))
+        w2, n2 = rate(everywhere.get(name))
+        if w:                                   # somebody got THIS game going
+            rank, share, seen = 3, confidence(w, n), n
+            why = f"{w} of {n} in this game"
+        elif w2 and n2 >= MIN_REPORTS:           # or that route, somewhere
+            rank, share, seen = 2, confidence(w2, n2), n2
+            why = f"{w2} of {n2} across every game shared"
+        elif n:
+            # tried in this game and never once worked. Below a route nobody
+            # has tried: ordering these by their own numbers put the route
+            # with the MOST failures second, and with three attempts in a
+            # pass the untried one was never reached.
+            rank, share, seen = 0, 0.0, -n
+            why = f"0 of {n} in this game"
+        else:
+            rank, share, seen, why = 1, 0.0, 0, ""
+        scored.append((rank, share, seen, i, name, why))
+    scored.sort(key=lambda x: (-x[0], -x[1], -x[2], x[3]))
+    return [(name, why) for _r, _s, _n, _i, name, why in scored]
+
+
 def next_route(data: dict, game, tried: str, offer: list[str] | None = None) -> str:
     """One sentence naming the route to try next, or "".
 
@@ -365,7 +439,9 @@ def issue_url(rec: dict, note: str = "") -> str:
             f"driver {rec.get('driver') or '-'}\n"
             f"- tool: {rec.get('tool') or '-'}\n"
             + (f"- measured: {rec.get('res')}% work area"
-               + (f", {rec.get('ms')} ms of model a frame"
+               + ((f", {rec.get('ms')} ms a frame for the model and feed "
+                   f"together" if rec.get("route") == "feeder"
+                   else f", {rec.get('ms')} ms of model a frame")
                   if rec.get("ms") else "")
                + (f", {rec.get('fps')} fps" if rec.get("fps") else "")
                + "\n" if rec.get("res") else "")

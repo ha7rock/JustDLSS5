@@ -28,6 +28,8 @@ jobs:
         run: python tools/check_backend.py
       - name: Regression tests
         run: |
+          python test_maintenance.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python test_pilot.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python test_ui.py
