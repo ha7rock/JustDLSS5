@@ -5,7 +5,7 @@ import sys
 import time
 from queue import SimpleQueue
 
-from PySide6.QtCore import Qt, QTimer, QUrl, QSize
+from PySide6.QtCore import Qt, QTimer, QUrl, QSize, QPoint
 from PySide6.QtGui import QDesktopServices, QFont, QIcon, QPixmap, QPainter, QColor, QPen, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QFrame, QStackedWidget, QLineEdit, QComboBox, QTableView,
@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
 from .backend import prefs, update, dlss, installer, feedcfg, reshade_ini, optiscaler, profiles, video, compare, remixlist, remixdl, sources, gpu
 from .service import BackendService, LibraryEntry
 from .jobs import Jobs
-from .library import LibraryModel, LibraryFilter, LibraryTable
+from .library import LibraryModel, LibraryFilter, LibraryTable, CoverView
 from .theme import STYLES
 from .controls import Button, ComboBox, Slider, HelpButton
 from .help_text import explanation
@@ -24,6 +24,7 @@ from .about import NAME, VERSION, REPOSITORY
 from . import feedback, updates
 from .diagnostic_view import DiagnosticDialog
 from .diagnostic_text import translate
+from .covers import CoverLoader
 
 
 def column(parent=None, margins=0, spacing=12):
@@ -142,6 +143,12 @@ class MainWindow(QMainWindow):
         self.model = LibraryModel(self)
         self.proxy = LibraryFilter(self)
         self.proxy.setSourceModel(self.model)
+        self.model.metadata = prefs.get("studio_library_metadata", {})
+        if not isinstance(self.model.metadata, dict):
+            self.model.metadata = {}
+        self.cover_loader = CoverLoader(self, network=background and prefs.get("online_art", True))
+        self.cover_retries = set()
+        self.cover_loader.ready.connect(self._cover_ready)
         self.current = None
         self.inspection = None
         self.options = installer.Options()
@@ -176,8 +183,12 @@ class MainWindow(QMainWindow):
         self.watch_events = SimpleQueue()
         self.watcher = None
         self.watch_result = None
+        self.game_reports = {}
+        self.inline_dialog = None
         self.watch_generation = 0
         self.watch_background = background
+        if background and prefs.get("online_art") is None:
+            prefs.set_("online_art", True)
         self._build()
         self.watch_timer = QTimer(self)
         self.watch_timer.setInterval(1000)
@@ -287,7 +298,7 @@ class MainWindow(QMainWindow):
         header.addWidget(self.add_button)
         header.addWidget(self.scan_button)
         self.scan_options = QToolButton()
-        self.scan_options.setText("▾")
+        self.scan_options.setText("")
         self.scan_options.setToolTip(self.t("扫描选项", "Scan options"))
         self.scan_options.setAccessibleName(self.scan_options.toolTip())
         self.scan_options.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -307,20 +318,40 @@ class MainWindow(QMainWindow):
         self.search.textChanged.connect(self._filter)
         tools.addWidget(self.search, 1)
         self.installed_filter = ComboBox()
-        self.installed_filter.addItems([self.t("全部游戏", "All games"), self.t("已安装", "Installed")])
+        self.installed_filter.addItems([self.t("全部状态", "All statuses"), self.t("已安装增强", "Components installed"), self.t("未安装增强", "No components"), self.t("风险与异常", "Risks and errors"), self.t("收藏", "Favorites")])
         self.installed_filter.currentIndexChanged.connect(self._filter)
         tools.addWidget(self.installed_filter)
         self.arch_filter = ComboBox()
         for title, value in ((self.t("全部架构", "All architectures"), 0), ("64 bit", 64), ("32 bit", 32)):
             self.arch_filter.addItem(title, value)
         self.arch_filter.currentIndexChanged.connect(self._filter)
-        tools.addWidget(self.arch_filter)
+        self.arch_filter.hide()
+        self.source_filter = ComboBox()
+        self.source_filter.addItem(self.t("全部平台", "All stores"), "")
+        self.source_filter.currentIndexChanged.connect(self._filter)
+        tools.addWidget(self.source_filter)
         layout.addLayout(tools)
+        browsing = row()
+        self.sort_combo = ComboBox()
+        for zh, en, key in (("名称", "Name", "name"), ("最近查看", "Recently viewed", "recent"),
+                            ("最近添加", "Recently added", "added"), ("按平台排列", "Store", "source")):
+            self.sort_combo.addItem(self.t(zh, en), key)
+        self._combo(self.sort_combo, prefs.get("studio_library_sort", "name"))
+        self.sort_combo.currentIndexChanged.connect(self._library_sort)
+        browsing.addWidget(self.sort_combo)
+        self.clear_filters = button(self.t("清除筛选", "Clear filters"), self._clear_library_filters)
+        browsing.addWidget(self.clear_filters)
+        browsing.addStretch()
+        self.view_combo = ComboBox()
+        self.view_combo.addItem(self.t("封面", "Covers"), "covers")
+        self.view_combo.addItem(self.t("列表", "List"), "list")
+        self._combo(self.view_combo, prefs.get("studio_library_view", "covers"))
+        self.view_combo.currentIndexChanged.connect(self._library_view)
+        browsing.addWidget(self.view_combo)
+        layout.addLayout(browsing)
         self.count_label = label("", "eyebrow")
         layout.addWidget(self.count_label)
-        self.library_split = QSplitter(Qt.Orientation.Horizontal)
-        self.library_split.setChildrenCollapsible(False)
-        self.library_split.setHandleWidth(16)
+        self.library_navigation = QStackedWidget()
         self.library_state = QStackedWidget()
         self.table = LibraryTable()
         self.table.setIconSize(QSize(32, 32))
@@ -329,7 +360,7 @@ class MainWindow(QMainWindow):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setShowGrid(False)
-        self.table.setSortingEnabled(True)
+        self.table.setSortingEnabled(False)
         self.table.sortByColumn(0, Qt.SortOrder.AscendingOrder)
         self.table.verticalHeader().hide()
         self.table.verticalHeader().setDefaultSectionSize(58)
@@ -343,7 +374,25 @@ class MainWindow(QMainWindow):
         self.table.setColumnWidth(0, 240)
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self.table.selectionModel().currentRowChanged.connect(self._select)
-        self.library_state.addWidget(self.table)
+        self.library_views = QStackedWidget()
+        self.grid = CoverView()
+        self.grid.setModel(self.proxy)
+        self.grid.setSelectionModel(self.table.selectionModel())
+        self.library_views.addWidget(self.grid)
+        self.library_views.addWidget(self.table)
+        self.library_state.addWidget(self.library_views)
+        for view in (self.grid, self.table):
+            view.clicked.connect(self._open_game)
+            view.activated.connect(self._open_game)
+            view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            view.customContextMenuRequested.connect(lambda point, v=view: self._library_menu(v, point))
+        self.grid.verticalScrollBar().valueChanged.connect(self._request_covers)
+        self.cover_timer = QTimer(page)
+        self.cover_timer.setSingleShot(True)
+        self.cover_timer.setInterval(100)
+        self.cover_timer.timeout.connect(self._load_visible_covers)
+        self._library_view(save=False)
+        self._library_sort(save=False)
         empty = QWidget()
         empty_layout = column(empty, 20, 10)
         empty_layout.addStretch()
@@ -355,12 +404,14 @@ class MainWindow(QMainWindow):
         self.empty_description.setAlignment(Qt.AlignmentFlag.AlignCenter)
         empty_layout.addWidget(self.empty_description)
         empty_layout.addSpacing(12)
+        self.empty_clear_button = button(self.t("清除筛选", "Clear filters"), self._clear_library_filters)
+        empty_layout.addWidget(self.empty_clear_button, alignment=Qt.AlignmentFlag.AlignHCenter)
         self.empty_scan_button = button(self.t("扫描游戏", "Scan games"), self.scan, "primary")
         self.empty_scan_button.setMinimumWidth(self.scan_button.minimumWidth())
         empty_layout.addWidget(self.empty_scan_button, alignment=Qt.AlignmentFlag.AlignHCenter)
         empty_layout.addStretch()
         self.library_state.addWidget(empty)
-        self.library_split.addWidget(self.library_state)
+        layout.addWidget(self.library_state, 1)
         self.detail_stack = QStackedWidget()
         self.detail_stack.setMinimumWidth(310)
         self.detail_stack.setObjectName("detail")
@@ -379,10 +430,92 @@ class MainWindow(QMainWindow):
         intro_layout.addWidget(label(self.t("仅用于离线游戏。反作弊系统可能拦截 ReShade 插件。", "For offline games. Anti-cheat may flag ReShade add-ons."), "notice", True))
         self.detail_stack.addWidget(intro)
         self.detail_stack.addWidget(self._detail_panel())
-        self.library_split.addWidget(self.detail_stack)
-        self.library_split.setSizes([610, 350])
-        layout.addWidget(self.library_split, 1)
-        return page
+        self.game_tool_page = QWidget()
+        tool_layout = column(self.game_tool_page, 20)
+        tool_layout.addWidget(button(self.t("‹ 返回游戏", "‹ Back to game"), self._close_game_tool), alignment=Qt.AlignmentFlag.AlignLeft)
+        self.game_tool_content = column(spacing=0)
+        tool_layout.addLayout(self.game_tool_content, 1)
+        self.detail_stack.addWidget(self.game_tool_page)
+        self.library_navigation.addWidget(page)
+        self.library_navigation.addWidget(self.detail_stack)
+        back_shortcut = QShortcut(QKeySequence("Escape"), self.detail_stack)
+        back_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        back_shortcut.activated.connect(self._back_to_library)
+        return self.library_navigation
+
+    def _open_game(self, index):
+        if self._game_tool_busy():
+            return
+        if not self._close_game_tool():
+            return
+        if not index.isValid():
+            return
+        self.table.setCurrentIndex(index)
+        entry = index.data(Qt.ItemDataRole.UserRole)
+        if not self.current or self.current.key != entry.key:
+            self._select(index, self.table.currentIndex())
+        self.detail_stack.setCurrentIndex(1)
+        self.library_navigation.setCurrentIndex(1)
+        self.back_to_library_button.setFocus()
+
+    def _game_tool_busy(self):
+        jobs = getattr(self.inline_dialog, "jobs", None)
+        return bool(jobs and jobs.active)
+
+    def _close_game_tool(self):
+        if self.inline_dialog is not None:
+            jobs = getattr(self.inline_dialog, "jobs", None)
+            if jobs and jobs.active:
+                self.status.setText(self.t("操作完成后可返回。", "Wait for the operation to finish."))
+                return False
+            dialog, self.inline_dialog = self.inline_dialog, None
+            if jobs:
+                jobs.shutdown()
+            self.game_tool_content.removeWidget(dialog)
+            dialog.deleteLater()
+        self.detail_stack.setCurrentIndex(1)
+        return True
+
+    def _mount_game_tool(self, dialog):
+        if not self._close_game_tool():
+            dialog.deleteLater()
+            return
+        self.inline_dialog = dialog
+        dialog.finished.connect(lambda code: self._close_game_tool() if self.inline_dialog is dialog else None)
+        dialog.setWindowFlags(Qt.WindowType.Widget)
+        self.game_tool_content.addWidget(dialog)
+        dialog.show()
+        self.detail_stack.setCurrentIndex(2)
+        self.library_navigation.setCurrentIndex(1)
+
+    def play_selected(self):
+        if not self.current or self.busy_job:
+            return
+        from .backend import autopilot
+        entry = self.current
+        def ready(result):
+            started, why = result
+            message = self.t("已请求启动：", "Launch requested: ") + entry.game.name if started else self.t("未启动：", "Not started: ") + why
+            self.status.setText(message)
+            if self.current and self.current.key == entry.key:
+                self.game_session_status.setText(message)
+            if why:
+                self._append_log(why)
+            if started:
+                self.watch_check.setChecked(True)
+                self._watch_refresh()
+        self._submit(lambda emit: autopilot.start(entry.game), ready, busy=True,
+                     title=self.t("正在启动游戏…", "Launching game…"), controls=(self.play_button,))
+
+    def _back_to_library(self):
+        if self.inline_dialog is not None:
+            self._close_game_tool()
+            return
+        was_open = self.library_navigation.currentIndex() == 1
+        self.library_navigation.setCurrentIndex(0)
+        if was_open:
+            self.library_views.currentWidget().setFocus()
+        self._request_covers()
 
     def _help_heading(self, title, key):
         heading = QWidget()
@@ -398,11 +531,23 @@ class MainWindow(QMainWindow):
     def _detail_panel(self):
         panel = QWidget()
         outer = column(panel, 0, 0)
+        self.back_to_library_button = button(self.t("← 返回游戏库", "← Back to library"), self._back_to_library, "ghost")
+        self.back_to_library_button.setToolTip(self.t("返回游戏库（Esc）", "Back to library (Esc)"))
+        outer.addWidget(self.back_to_library_button, alignment=Qt.AlignmentFlag.AlignLeft)
         content = QWidget()
         layout = column(content, 20, 10)
         layout.addWidget(label(self.t("游戏设置", "GAME SETUP"), "eyebrow"))
         self.game_title = label("", "subheading", True)
         layout.addWidget(self.game_title)
+        game_actions = row()
+        self.play_button = button(self.t("启动游戏", "Play"), self.play_selected, "primary")
+        game_actions.addWidget(self.play_button)
+        self.game_report_button = button(self.t("运行检查", "Session check"), self.diagnose_selected)
+        game_actions.addWidget(self.game_report_button)
+        game_actions.addStretch()
+        layout.addLayout(game_actions)
+        self.game_session_status = label("", "muted", True)
+        layout.addWidget(self.game_session_status)
         self.game_meta = label("", "muted", True)
         layout.addWidget(self.game_meta)
         self.compatibility = label("", "badge", True)
@@ -593,7 +738,12 @@ class MainWindow(QMainWindow):
         return panel
 
     def navigate(self, index):
+        if self._game_tool_busy():
+            self.status.setText(self.t("操作完成后可切换页面。", "Wait for the operation to finish before changing pages."))
+            return
         self.pages.setCurrentIndex(index)
+        if index == 0:
+            self._back_to_library()
         for i, btn in enumerate(self.nav_buttons):
             btn.setChecked(i == index)
 
@@ -605,10 +755,29 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "count_label"):
             return
         self.proxy.set_query(self.search.text(), self.installed_filter.currentIndex() == 1,
-                             self.arch_filter.currentData() or 0)
+                             self.arch_filter.currentData() or 0, self.installed_filter.currentIndex(),
+                             self.source_filter.currentData() or "")
+        selected_source = self.source_filter.currentData()
+        sources = sorted({e.game.source for e in self.model.entries})
+        if [self.source_filter.itemData(i) for i in range(1, self.source_filter.count())] != sources:
+            self.source_filter.blockSignals(True)
+            self.source_filter.clear()
+            self.source_filter.addItem(self.t("全部平台", "All stores"), "")
+            for source in sources:
+                self.source_filter.addItem(source, source)
+            self._combo(self.source_filter, selected_source or "")
+            self.source_filter.blockSignals(False)
+            self.proxy.set_query(self.search.text(), self.installed_filter.currentIndex() == 1,
+                                 self.arch_filter.currentData() or 0, self.installed_filter.currentIndex(),
+                                 self.source_filter.currentData() or "")
         count = self.proxy.rowCount()
+        active = bool(self.search.text() or self.installed_filter.currentIndex() or self.source_filter.currentIndex() or self.arch_filter.currentIndex())
+        self.clear_filters.setVisible(active)
+        self.empty_clear_button.setVisible(active)
+        self.empty_scan_button.setVisible(not self.model.entries)
+        self._request_covers()
         installed = sum(e.installed for e in self.model.entries)
-        self.count_label.setText(self.t(f"{count} 款游戏   /   {installed} 款已安装", f"{count} GAMES   /   {installed} INSTALLED"))
+        self.count_label.setText(self.t(f"显示 {count} / {len(self.model.entries)} 款 · {installed} 款已安装增强", f"{count} / {len(self.model.entries)} games · {installed} with components"))
         self.library_state.setCurrentIndex(0 if count else 1)
         if self.model.entries and not count:
             self.empty_title.setText(self.t("没有匹配的游戏", "No matching games"))
@@ -621,9 +790,119 @@ class MainWindow(QMainWindow):
             self.inspection = None
             self.selection_generation += 1
             self.detail_stack.setCurrentIndex(0)
+            self._back_to_library()
+
+    def _remember_entries(self, entries):
+        now = time.time()
+        for entry in entries:
+            self.model.metadata.setdefault(entry.key, {}).setdefault("added", now)
+        prefs.set_("studio_library_metadata", self.model.metadata)
+
+    def _clear_library_filters(self):
+        self.search.clear()
+        self.installed_filter.setCurrentIndex(0)
+        self.source_filter.setCurrentIndex(0)
+        self.arch_filter.setCurrentIndex(0)
+        self._filter()
+
+    def _library_sort(self, *args, save=True):
+        self.proxy.order = self.sort_combo.currentData() or "name"
+        self.proxy.invalidate()
+        self.proxy.sort(0, Qt.SortOrder.AscendingOrder)
+        if save:
+            prefs.set_("studio_library_sort", self.proxy.order)
+        self._request_covers()
+
+    def _library_view(self, *args, save=True):
+        mode = self.view_combo.currentData()
+        self.library_views.setCurrentIndex(1 if mode == "list" else 0)
+        if save:
+            prefs.set_("studio_library_view", mode)
+        if self.current:
+            for i in range(self.proxy.rowCount()):
+                index = self.proxy.index(i, 0)
+                if index.data(Qt.ItemDataRole.UserRole).key == self.current.key:
+                    self.library_views.currentWidget().scrollTo(index)
+                    break
+        self._request_covers()
+
+    def _request_covers(self, *args):
+        if hasattr(self, "cover_timer"):
+            self.cover_timer.start()
+
+    def _load_visible_covers(self):
+        if self.library_views.currentIndex() != 0:
+            return
+        columns = max(1, self.grid.viewport().width() // max(1, self.grid.gridSize().width()))
+        start = (self.grid.verticalScrollBar().value() // max(1, self.grid.gridSize().height())) * columns
+        for i in range(start, min(start + 40, self.proxy.rowCount())):
+            entry = self.proxy.index(i, 0).data(Qt.ItemDataRole.UserRole)
+            custom = self.model.metadata.get(entry.key, {}).get("cover", "")
+            self.cover_loader.request(entry, custom)
+
+    def _cover_ready(self, key, result):
+        custom, image = result
+        retried = key in self.cover_retries
+        self.cover_retries.discard(key)
+        if custom != self.model.metadata.get(key, {}).get("cover", ""):
+            return
+        if image.isNull():
+            if custom:
+                self.status.setText(self.t("封面无法读取，请选择有效的图片。", "Could not read the cover. Choose a valid image."))
+            elif retried:
+                self.status.setText(self.t("未能获取封面，可稍后重试或右键选择本地图片。", "Cover unavailable. Retry later or choose a local image from the context menu."))
+            return
+        self.model.covers[key] = QPixmap.fromImage(image)
+        if custom or retried:
+            self.status.setText(self.t("封面已更新", "Cover updated"))
+        for i, entry in enumerate(self.model.entries):
+            if entry.key == key:
+                self.model.dataChanged.emit(self.model.index(i, 0), self.model.index(i, 0))
+                break
+
+    def _library_menu(self, view, point):
+        index = view.indexAt(point)
+        if not index.isValid():
+            return
+        entry = index.data(Qt.ItemDataRole.UserRole)
+        meta = self.model.metadata.setdefault(entry.key, {})
+        menu = QMenu(view)
+        favorite = menu.addAction(self.t("取消收藏" if meta.get("favorite") else "收藏", "Unfavorite" if meta.get("favorite") else "Favorite"))
+        cover = menu.addAction(self.t("选择封面…", "Choose cover…"))
+        reset = menu.addAction(self.t("恢复自动封面", "Use automatic cover"))
+        reset.setEnabled(bool(meta.get("cover")))
+        retry = menu.addAction(self.t("重新获取封面", "Retry cover download"))
+        retry.setEnabled(not meta.get("cover") and entry.key not in self.model.covers)
+        folder = menu.addAction(self.t("打开游戏文件夹", "Open game folder"))
+        action = menu.exec(view.viewport().mapToGlobal(point))
+        if action == favorite:
+            meta["favorite"] = not meta.get("favorite", False)
+            self._library_sort(save=False)
+            self._filter()
+        elif action == cover:
+            path, _ = QFileDialog.getOpenFileName(self, self.t("选择封面", "Choose cover"), "", "Images (*.png *.jpg *.jpeg *.webp *.bmp)")
+            if not path:
+                return
+            meta["cover"] = path
+            self.status.setText(self.t("正在加载封面…", "Loading cover…"))
+            self.cover_loader.requested.discard((entry.key, path))
+            self.cover_loader.request(entry, path)
+        elif action == reset:
+            meta.pop("cover", None)
+            self.model.covers.pop(entry.key, None)
+            self.cover_loader.requested.discard((entry.key, ""))
+            self.cover_loader.request(entry)
+        elif action == retry:
+            self.cover_retries.add(entry.key)
+            self.status.setText(self.t("正在查找封面…", "Looking for a cover…"))
+            self.cover_loader.request(entry, retry=True)
+        elif action == folder:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(entry.game.folder)))
+        prefs.set_("studio_library_metadata", self.model.metadata)
+        self.model.refresh()
 
     def _submit(self, work, done=None, busy=False, title="", controls=(), failed=None):
-        if busy and self.busy_job is not None:
+        if self._game_tool_busy() or (busy and self.busy_job is not None):
             self.status.setText(self.t("已有任务正在运行，请稍候。", "A task is already running. Please wait."))
             return None
         job_id = self.jobs.submit(work)
@@ -700,12 +979,16 @@ class MainWindow(QMainWindow):
         self.activity_log.appendPlainText(str(text))
 
     def _set_busy(self, busy):
+        self.play_button.setEnabled(not busy and self.current is not None)
+        self.game_report_button.setEnabled(not busy and self.current is not None)
         self.scan_button.setEnabled(not busy)
         self.scan_options.setEnabled(not busy)
         self.empty_scan_button.setEnabled(not busy)
         self.add_button.setEnabled(not busy)
         self.language.setEnabled(not self.jobs.active)
-        self.detail_stack.widget(1).setEnabled(not busy)
+        for widget in self.detail_stack.widget(1).findChildren(QWidget, options=Qt.FindChildOption.FindDirectChildrenOnly):
+            if widget is not self.back_to_library_button:
+                widget.setEnabled(not busy)
         self.install_button.setEnabled(not busy and self._detail_ready and self._route_usable())
 
     def _hardware(self, result):
@@ -741,14 +1024,27 @@ class MainWindow(QMainWindow):
         self.activity_title.setText(message)
 
     def _scanned(self, entries):
+        entries = list(entries)
+        selected = self.current.key if self.current else None
+        grid_scroll = self.grid.verticalScrollBar().value()
+        list_scroll = self.table.verticalScrollBar().value()
         self.current = None
         self.inspection = None
         self.selection_generation += 1
         self.detail_stack.setCurrentIndex(0)
+        self._back_to_library()
+        self._remember_entries(entries)
         self.model.replace(entries)
         self._watch_refresh()
         self._filter()
         self.navigate(0)
+        if selected:
+            for i in range(self.proxy.rowCount()):
+                if self.proxy.index(i, 0).data(Qt.ItemDataRole.UserRole).key == selected:
+                    self.table.selectRow(i)
+                    break
+        QTimer.singleShot(0, lambda: (self.grid.verticalScrollBar().setValue(grid_scroll),
+                                     self.table.verticalScrollBar().setValue(list_scroll)))
 
     def add_game(self):
         if self.busy_job:
@@ -760,16 +1056,19 @@ class MainWindow(QMainWindow):
 
     def _added(self, entry):
         entries = [e for e in self.model.entries if e.key != entry.key] + [entry]
+        self._remember_entries(entries)
         self.model.replace(entries)
         self._watch_refresh()
         self.search.clear()
         self.installed_filter.setCurrentIndex(0)
         self.arch_filter.setCurrentIndex(0)
+        self.source_filter.setCurrentIndex(0)
         self._filter()
         self.navigate(0)
         for i in range(self.proxy.rowCount()):
             if self.proxy.index(i, 0).data(Qt.ItemDataRole.UserRole).key == entry.key:
                 self.table.selectRow(i)
+                self._open_game(self.proxy.index(i, 0))
                 break
 
     def _select(self, index, previous):
@@ -781,6 +1080,7 @@ class MainWindow(QMainWindow):
         self._detail_ready = False
         self.selection_generation += 1
         generation = self.selection_generation
+        self.game_session_status.setText("")
         self.game_title.setText(entry.game.name)
         self.game_meta.setText(f"{entry.game.source}  ·  {entry.game.api}  ·  {entry.game.bitness or '?'} bit")
         self.game_path.setText(str(entry.game.folder))
@@ -788,6 +1088,8 @@ class MainWindow(QMainWindow):
         self.anticheat_warning.setText(self.t(f"检测到 {entry.anticheat}。插件可能被拦截、导致游戏无法启动或封禁账号。请勿用于联网模式。", f"{entry.anticheat} detected. Add-ons may be blocked, prevent launch or cause bans. Do not use online."))
         self.anticheat_warning.setVisible(bool(entry.anticheat))
         self.detail_stack.setCurrentIndex(1)
+        self.model.metadata.setdefault(entry.key, {})["recent"] = time.time()
+        prefs.set_("studio_library_metadata", self.model.metadata)
         self.install_button.setEnabled(False)
         self.preview_button.setEnabled(False)
         self.more_button.setEnabled(False)
@@ -1000,11 +1302,15 @@ class MainWindow(QMainWindow):
         def done(result):
             self._append_log(result.text)
             dialog = DiagnosticDialog(result, entry.game.name, self.chinese, self)
-            if dialog.exec() == QDialog.DialogCode.Accepted and result.resolution:
-                self._submit(lambda emit: self.service.apply_tune(entry, result),
-                             lambda value: self.show_text(self.t("设置已保存", "Setting saved"), self.t(
-                                 f"渲染区域已设为 {value}%，下次启动游戏生效。", f"Work area set to {value}%; restart the game to apply.")),
-                             busy=True, title=self.t("正在保存设置…", "Saving settings…"), controls=(self.session_button,))
+            def finished(code):
+                self._close_game_tool()
+                if code == QDialog.DialogCode.Accepted and result.resolution:
+                    self._submit(lambda emit: self.service.apply_tune(entry, result),
+                                 lambda value: self.show_text(self.t("设置已保存", "Setting saved"), self.t(
+                                     f"渲染区域已设为 {value}%，下次启动游戏生效。", f"Work area set to {value}%; restart the game to apply.")),
+                                 busy=True, title=self.t("正在保存设置…", "Saving settings…"), controls=(self.session_button,))
+            dialog.finished.connect(finished)
+            self._mount_game_tool(dialog)
         self._submit(lambda emit: self.service.session_report(entry, target), done, busy=True,
                      title=self.t("正在读取运行记录…", "Reading session records…"), controls=(self.session_button,))
 
@@ -1150,8 +1456,14 @@ class MainWindow(QMainWindow):
         else:
             self._watch_refresh()
 
+    def _set_online_art(self, enabled):
+        prefs.set_("online_art", enabled)
+        self.cover_loader.network = enabled
+        self.cover_loader.requested.clear()
+        self._request_covers()
+
     def _watch_tick(self):
-        if not self.watch_check.isChecked() or self.jobs.active or QApplication.activeModalWidget():
+        if not self.watch_check.isChecked() or self.jobs.active or self._game_tool_busy() or QApplication.activeModalWidget():
             return
         while not self.watch_events.empty():
             kind, folder, value = self.watch_events.get()
@@ -1159,10 +1471,15 @@ class MainWindow(QMainWindow):
                 continue
             entry = next((e for e in self.model.entries if e.game.install_dir == folder), None)
             if entry:
-                def ready(result, name=entry.game.name):
+                def ready(result, name=entry.game.name, item=entry):
                     self.watch_result = (name, result)
+                    self.game_reports[item.key] = result
+                    if self.current and self.current.key == item.key:
+                        self.game_session_status.setText(self.t("游戏已退出，运行检查已完成。", "Game closed. Session check complete."))
+                        if self.library_navigation.currentIndex() == 1:
+                            self._show_diagnostic(item, result)
                     self.watch_report_button.setEnabled(True)
-                    self.status.setText(self.t(f"{name} 已退出；可在设置中查看运行检查。", f"{name} closed. View the session check in Settings."))
+                    self.status.setText(self.t(f"{name} 已退出；运行检查已完成。", f"{name} closed. Session check complete."))
                     self._append_log(name + "\n" + result.text)
                 self._submit(lambda emit, e=entry: self.service.diagnose(e), ready, busy=True,
                              title=self.t("正在检查本次运行…", "Checking the last session…"))
@@ -1171,14 +1488,21 @@ class MainWindow(QMainWindow):
     def show_watch_report(self):
         if self.watch_result:
             name, result = self.watch_result
-            DiagnosticDialog(result, name, self.chinese, self).exec()
+            entry = next((item for item in self.model.entries if item.game.name == name), None)
+            if entry:
+                for row in range(self.proxy.rowCount()):
+                    index = self.proxy.index(row, 0)
+                    if index.data(Qt.ItemDataRole.UserRole).key == entry.key:
+                        self._open_game(index)
+                        break
+                self._show_diagnostic(entry, result)
 
     def manage_runtimes(self):
-        if self.current and not self.busy_job:
+        if self.current and not self.busy_job and not self._game_tool_busy():
             from .runtime_tools import RuntimeDialog
             dialog = RuntimeDialog(self.current.game, self.chinese, self)
-            dialog.exec()
-            dialog.deleteLater()
+            dialog.finished.connect(lambda code: self._close_game_tool())
+            self._mount_game_tool(dialog)
 
     def remove_remix(self):
         if not self.current or self.busy_job:
@@ -1199,7 +1523,7 @@ class MainWindow(QMainWindow):
                      title=self.t("正在检查模组记录…", "Checking mod record…"))
 
     def manage_openxr(self):
-        if not self.busy_job:
+        if not self.busy_job and not self._game_tool_busy():
             from .runtime_tools import OpenXRDialog
             dialog = OpenXRDialog(self.chinese, self)
             dialog.exec()
@@ -1212,11 +1536,13 @@ class MainWindow(QMainWindow):
         entry, options, inspection = self.current, self._options(), self.inspection
         def ready(plan):
             dialog = PilotDialog(entry, plan, self.chinese, self)
-            dialog.exec()
-            if dialog.started:
-                self._submit(lambda emit: self.service.decorate(entry.game), self._added, busy=True,
-                             title=self.t("正在更新安装状态…", "Refreshing installation state…"))
-            dialog.deleteLater()
+            def finished(code):
+                self._close_game_tool()
+                if dialog.started:
+                    self._submit(lambda emit: self.service.decorate(entry.game), self._added, busy=True,
+                                 title=self.t("正在更新安装状态…", "Refreshing installation state…"))
+            dialog.finished.connect(finished)
+            self._mount_game_tool(dialog)
         self._submit(lambda emit: prepare(entry, options, inspection), ready, busy=True,
                      title=self.t("正在检查自动尝试条件…", "Checking trial requirements…"))
 
@@ -1231,14 +1557,20 @@ class MainWindow(QMainWindow):
                      busy=True, title=self.t("正在检查安装与运行…", "Checking installation and session…"))
 
     def _show_diagnostic(self, entry, result):
+        self.game_reports[entry.key] = result
+        if not self.current or self.current.key != entry.key:
+            return
         dialog = DiagnosticDialog(result, entry.game.name, self.chinese, self, allow_answer=True)
-        dialog.exec()
-        answer = dialog.started_answer
-        dialog.deleteLater()
-        if answer in ("closed itself", "never started"):
-            self._submit(lambda emit: self.service.diagnose(entry, started=answer),
-                         lambda updated: self._show_diagnostic(entry, updated), busy=True,
-                         title=self.t("正在更新检查结果…", "Updating session check…"))
+        def finished(code):
+            answer = dialog.started_answer
+            if self.inline_dialog is dialog:
+                self._close_game_tool()
+            if answer in ("closed itself", "never started"):
+                self._submit(lambda emit: self.service.diagnose(entry, started=answer),
+                             lambda updated: self._show_diagnostic(entry, updated), busy=True,
+                             title=self.t("正在更新检查结果…", "Updating session check…"))
+        dialog.finished.connect(finished)
+        self._mount_game_tool(dialog)
 
     def component_versions(self):
         entry = self.current
@@ -1269,7 +1601,7 @@ class MainWindow(QMainWindow):
             if not items:
                 layout.addWidget(label(self.t("未检测到可检查的组件。", "No components available to check."), "muted", True))
             layout.addWidget(button(self.t("关闭", "Close"), dialog.accept))
-            dialog.exec()
+            self._mount_game_tool(dialog)
         self._submit(lambda emit: self.service.versions(entry), done, busy=True,
                      title=self.t("正在检查组件版本…", "Checking component versions…"))
 
@@ -1290,7 +1622,10 @@ class MainWindow(QMainWindow):
         output.setPlainText(str(text))
         layout.addWidget(output, 1)
         layout.addWidget(button(self.t("关闭", "Close"), dialog.accept), alignment=Qt.AlignmentFlag.AlignRight)
-        dialog.exec()
+        if self.current and self.pages.currentIndex() == 0 and self.library_navigation.currentIndex() == 1:
+            self._mount_game_tool(dialog)
+        else:
+            dialog.exec()
 
     def load_catalog(self):
         def done(result):
@@ -1359,19 +1694,29 @@ class MainWindow(QMainWindow):
         self._submit(lambda emit: [name for name in profiles.list_profiles() if not profiles.is_builtin(name)], done)
 
     def change_language(self, index):
-        if self.jobs.active:
+        if self.jobs.active or self._game_tool_busy():
             self.language.blockSignals(True)
             self.language.setCurrentIndex(0 if self.chinese else 1)
             self.language.blockSignals(False)
             return
         options = self._options() if self.inspection else None
+        detail_open = self.library_navigation.currentIndex() == 1
         selected, inspection, page = self.current, self.inspection, self.pages.currentIndex()
         self.chinese = index == 0
         prefs.set_("language", "zh_CN" if self.chinese else "en")
+        self._close_game_tool()
         old = self.takeCentralWidget()
         self._build()
         old.deleteLater()
         self.current, self.inspection = selected, inspection
+        if selected:
+            selection = self.table.selectionModel()
+            selection.blockSignals(True)
+            for row_index in range(self.proxy.rowCount()):
+                if self.proxy.index(row_index, 0).data(Qt.ItemDataRole.UserRole).key == selected.key:
+                    self.table.selectRow(row_index)
+                    break
+            selection.blockSignals(False)
         if inspection:
             self.game_title.setText(selected.game.name)
             self.game_path.setText(str(selected.game.folder))
@@ -1379,6 +1724,8 @@ class MainWindow(QMainWindow):
             self._inspected(inspection, self.selection_generation)
             self._apply_options(options)
         self.navigate(page)
+        if detail_open and inspection:
+            self.library_navigation.setCurrentIndex(1)
         self.activity_log.setPlainText("\n".join(self.log_lines))
 
     def _activity_page(self):
@@ -1438,9 +1785,13 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.overlay_combo)
         layout.addWidget(label(self.t("重新安装组件后生效。", "Takes effect after reinstalling components."), "muted"))
         self.watch_check = QCheckBox(self.t("游戏退出后检查运行结果", "Check sessions after games close"))
-        self.watch_check.setChecked(bool(prefs.get("studio_watch_sessions", False)))
+        self.watch_check.setChecked(bool(prefs.get("studio_watch_sessions", True)))
         self.watch_check.toggled.connect(self._watch_changed)
         layout.addWidget(self.watch_check)
+        art_check = QCheckBox(self.t("联网补全游戏封面（向商店查询游戏名称）", "Download missing covers (queries game titles from stores)"))
+        art_check.setChecked(bool(prefs.get("online_art", True)))
+        art_check.toggled.connect(self._set_online_art)
+        layout.addWidget(art_check)
         layout.addWidget(label(self.t("仅在本应用打开时读取已安装游戏的进程和组件记录，不会启动游戏或安装组件。", "While this app is open, reads process and component records for installed games. Does not launch games or install components."), "muted", True))
         self.watch_report_button = button(self.t("查看最近运行检查", "View last session check"), self.show_watch_report)
         self.watch_report_button.setEnabled(self.watch_result is not None)
@@ -1448,7 +1799,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(button(self.t("OpenXR 注册管理", "OpenXR registration"), self.manage_openxr), alignment=Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(label(self.t("维护", "MAINTENANCE"), "eyebrow"))
         layout.addWidget(button(self.t("重新安装所有游戏的组件", "Reinstall components for all games"), self.update_all), alignment=Qt.AlignmentFlag.AlignLeft)
-        layout.addWidget(label(self.t("窗口大小自动保存。Ctrl+F 搜索游戏。拖动游戏列表与设置之间的分隔线可调整空间。", "Window size is remembered. Ctrl+F focuses search. Drag the divider to adjust library and setup widths."), "muted", True))
+        layout.addWidget(label(self.t("窗口大小自动保存。Ctrl+F 搜索游戏，Esc 返回上一页。", "Window size is remembered. Ctrl+F focuses search; Esc returns to the previous page."), "muted", True))
         layout.addStretch()
         return scroller(page)
 
@@ -1701,19 +2052,22 @@ class MainWindow(QMainWindow):
                 content.addWidget(scroller(image), 1)
                 content.addWidget(label(filename.name, "muted", True))
                 layout.addWidget(pane)
-            dialog.exec()
+            self._mount_game_tool(dialog)
         self._submit(lambda emit: compare.find_screenshots(entry.game.install_dir), done)
 
     def closeEvent(self, event):
-        if self.jobs.active:
+        if self.jobs.active or self._game_tool_busy():
             self.status.setText(self.t("任务正在运行，完成后可关闭。", "A task is running. Close after it finishes."))
             event.ignore()
             return
+        self._close_game_tool()
         prefs.set_("studio_window", [self.width(), self.height()])
         prefs.set_("studio_window_layout", 1)
         self.watch_timer.stop()
         if self.watcher:
             self.watcher.stop()
+        self.cover_timer.stop()
+        self.cover_loader.shutdown()
         self.jobs.shutdown()
         video.stop_webcam()
         event.accept()

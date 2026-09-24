@@ -49,10 +49,10 @@ def main():
                         shutil.copyfileobj(source, dest)
         shutil.copytree(ROOT / "frontend", candidate / "frontend", ignore=shutil.ignore_patterns("__pycache__"))
         shutil.copytree(ROOT / "tools", candidate / "tools", ignore=shutil.ignore_patterns("__pycache__"))
-        for filename in ("test_ui.py", "test_cli.py", "test_product.py", "test_reshade_ini.py", "test_upstream.py", "test_pilot.py", "test_maintenance.py",
+        for filename in ("test_ui.py", "test_cli.py", "test_product.py", "test_reshade_ini.py", "test_upstream.py", "test_pilot.py", "test_maintenance.py", "test_library.py",
                          "autopilot_desktop.py"):
             shutil.copy2(ROOT / filename, candidate / filename)
-        for script in ("tools/check_backend.py", "test_ui.py", "test_cli.py", "test_product.py", "test_reshade_ini.py", "test_upstream.py", "test_pilot.py", "test_maintenance.py"):
+        for script in ("tools/check_backend.py", "test_ui.py", "test_cli.py", "test_product.py", "test_reshade_ini.py", "test_upstream.py", "test_pilot.py", "test_maintenance.py", "test_library.py"):
             subprocess.run([sys.executable, script], cwd=candidate, check=True)
         print("Validated backend commit:", commit)
         if not args.apply:

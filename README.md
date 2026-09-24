@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <strong>v0.2.15 · Player preview</strong> · install core: DLSS5-Autopilot <strong>v2.0.5</strong>
+  <strong>v0.2.16 · Player preview</strong> · install core: DLSS5-Autopilot <strong>v2.0.5</strong>
 </p>
 
 <p align="center">
@@ -24,7 +24,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.2.15-blue" alt="version 0.2.15">
+  <img src="https://img.shields.io/badge/version-0.2.16-blue" alt="version 0.2.16">
   <img src="https://img.shields.io/badge/status-player%20preview-orange" alt="player preview">
   <img src="https://img.shields.io/badge/platform-Windows%20x64-lightgrey" alt="Windows x64">
   <img src="https://img.shields.io/badge/engine-Autopilot%20v2.0.5-informational" alt="Autopilot v2.0.5">
@@ -35,14 +35,14 @@
 
 ## Download
 
-Download the Windows x64 package from [Releases](https://github.com/ha7rock/JustDLSS5/releases): `JustDLSS5-v0.2.15-windows-x64.zip`.
+Download the Windows x64 package from [Releases](https://github.com/ha7rock/JustDLSS5/releases): `JustDLSS5-v0.2.16-windows-x64.zip`.
 
 1. Extract the full archive to a writable folder.
 2. Run `JustDLSS5.exe`. Keep `_internal` and the license files next to it; do not copy only the EXE.
 3. The portable build does not require a separate Python install.
 4. To verify integrity, use `SHA256SUMS.txt`. PowerShell example: `Get-FileHash <file> -Algorithm SHA256`.
 
-The same release also includes `BUILD-INFO.json` (build metadata) and `JustDLSS5-v0.2.15-source-materials.zip` (application and matching dependency sources).
+The same release also includes `BUILD-INFO.json` (build metadata) and `JustDLSS5-v0.2.16-source-materials.zip` (application and matching dependency sources).
 
 Testing guide: [docs/TESTING-PREVIEW.zh-CN.md](docs/TESTING-PREVIEW.zh-CN.md). Feedback: [open an issue](https://github.com/ha7rock/JustDLSS5/issues/new?template=bug-report.yml), or use **Report a problem** in the app.
 
@@ -153,7 +153,7 @@ python autopilot_desktop.py
 build-desktop.bat
 ```
 
-Output: `dist/v0.2.15/JustDLSS5/JustDLSS5.exe`. Keep `_internal` next to the executable.
+Output: `dist/v0.2.16/JustDLSS5/JustDLSS5.exe`. Keep `_internal` next to the executable.
 
 Maintainer notes: [docs/MAINTAINING.zh-CN.md](docs/MAINTAINING.zh-CN.md).
 
@@ -175,11 +175,11 @@ Maintainer notes: [docs/MAINTAINING.zh-CN.md](docs/MAINTAINING.zh-CN.md).
 ## Docs
 
 - [docs/TESTING-PREVIEW.zh-CN.md](docs/TESTING-PREVIEW.zh-CN.md)
-- [docs/RELEASE-v0.2.15.md](docs/RELEASE-v0.2.15.md)
+- [docs/RELEASE-v0.2.16.md](docs/RELEASE-v0.2.16.md)
 - [docs/THIRD-PARTY-NOTICES.md](docs/THIRD-PARTY-NOTICES.md)
 - [docs/MAINTAINING.zh-CN.md](docs/MAINTAINING.zh-CN.md)
 - [docs/UPSTREAM-AND-SOURCES.zh-CN.md](docs/UPSTREAM-AND-SOURCES.zh-CN.md) · [docs/UPSTREAM_README.md](docs/UPSTREAM_README.md)
 
 ---
 
-<p align="center">JustDLSS5 · v0.2.15 player preview · MIT · community tool, not affiliated with NVIDIA</p>
+<p align="center">JustDLSS5 · v0.2.16 player preview · MIT · community tool, not affiliated with NVIDIA</p>

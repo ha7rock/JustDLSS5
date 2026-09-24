@@ -32,6 +32,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python test_pilot.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python test_library.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python test_ui.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python test_cli.py

@@ -154,14 +154,19 @@ class DesktopTests(unittest.TestCase):
         from frontend.session import SessionResult
         self.select_game()
         result = SessionResult("original", "fixture", dlss.OPTI, verdict="Working.")
+        from frontend.diagnostic_view import DiagnosticDialog
         with patch.object(self.service, "diagnose", return_value=result, create=True), \
-             patch("frontend.desktop.DiagnosticDialog") as dialog:
-            dialog.return_value.started_answer = None
+             patch.object(DiagnosticDialog, "exec", side_effect=AssertionError("Must remain in page")):
             self.window.diagnose_selected()
             self.assertTrue(self.window.busy_job)
             self.drain()
-            dialog.assert_called_once_with(result, self.window.current.game.name, True, self.window, allow_answer=True)
-            dialog.return_value.exec.assert_called_once()
+            self.assertIsInstance(self.window.inline_dialog, DiagnosticDialog)
+            self.assertEqual(self.window.detail_stack.currentIndex(), 2)
+            self.assertEqual(self.window.library_navigation.currentIndex(), 1)
+            self.assertIsNone(QApplication.activeModalWidget())
+            self.window._back_to_library()
+            self.assertEqual(self.window.detail_stack.currentIndex(), 1)
+            self.assertIsNone(self.window.inline_dialog)
         self.assertFalse(self.window.busy_job)
 
     @classmethod
@@ -197,6 +202,7 @@ class DesktopTests(unittest.TestCase):
     def select_game(self, index=0):
         self.window._scanned(self.service.entries)
         self.window.table.selectRow(index)
+        self.window._open_game(self.window.proxy.index(index, 0))
         self.drain()
 
     def test_starts_in_library_without_scan_or_io(self):
@@ -268,7 +274,7 @@ class DesktopTests(unittest.TestCase):
         self.assertGreaterEqual(self.window.table.columnWidth(0), 200)
         self.window.advanced_toggle.setChecked(True)
         self.app.processEvents()
-        for widget in (self.window.install_button, self.window.scan_button, self.window.language):
+        for widget in (self.window.install_button, self.window.back_to_library_button, self.window.language):
             self.assertTrue(widget.isVisible())
             position = widget.mapTo(self.window, widget.rect().bottomRight())
             self.assertLessEqual(position.x(), self.window.width())
