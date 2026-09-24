@@ -55,7 +55,7 @@ for item in a.binaries:
     name = source.name.lower()
     if "pyside6" in str(source).lower():
         if "plugins" in source.parts:
-            plugins = {"qwindows.dll", "qgif.dll", "qico.dll", "qjpeg.dll", "qsvg.dll", "qsvgicon.dll"}
+            plugins = {"qwindows.dll", "qgif.dll", "qico.dll", "qjpeg.dll", "qwebp.dll", "qsvg.dll", "qsvgicon.dll"}
             if name not in plugins:
                 continue
         if name.startswith("qt6") and name not in {"qt6core.dll", "qt6gui.dll", "qt6widgets.dll", "qt6svg.dll", "qt6network.dll", "qt6opengl.dll"}:
