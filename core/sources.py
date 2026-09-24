@@ -93,11 +93,13 @@ SEVEN_ZR = (("https://github.com/ip7z/7zip/releases/download/26.03/7zr.exe",),
             "ad4c82fadcbdf93c03b4fc440f300509c7d60c5c2f4d183e35d9d70d6957037d")
 
 # None = take the newest build from the mirror. On the feeder route the pick
-# is narrowed by renodx_for_feeder(): the feeder's stable release only works
-# with 4.55, its pre-releases with 4.6/4.7.
+# is narrowed by renodx_for_feeder(), which pins only feeder builds below
+# 0.8.0-beta.3 to 4.55. The release line today (v0.15.1) is above that, so
+# nothing is pinned by the feeder version itself - the driver rule below is
+# what pins 4.55 on 616.64 and newer.
 RENODX_DEFAULT = None
 
-# The last renodx-dlss5 build the feeder's STABLE release (0.7.0) accepts.
+# The last renodx-dlss5 build the feeder's 0.7.0 release accepts.
 # Its README pins it: "newer builds now overlap this project and conflict".
 # Support for 4.6 arrived in 0.8.0-beta.3 and for 4.7 in 0.9.0-beta.1.
 FEEDER_RENODX_PIN = "4.55"
@@ -211,6 +213,18 @@ def _page(url: str, timeout: int = 30) -> str:
 
 
 _PRE_WORDS = ("beta", "alpha", "-rc", "preview", "-pre")
+
+
+def _is_prerelease(rel: dict) -> bool:
+    """Is this release a test build - by GitHub's flag, or by its own name.
+
+    The flag is the publisher's to set and the feeder's author does not set
+    it on his betas (#325, #348), so the tag decides as well. This is the
+    same rule release_tags_html applies to the pages, which is what keeps
+    the API path and the github.com path answering the same build.
+    """
+    low = str(rel.get("tag_name", "") or "").lower()
+    return bool(rel.get("prerelease")) or any(w in low for w in _PRE_WORDS)
 
 
 def release_tags_html(repo: str, pages: int = 1) -> list[tuple[str, bool]]:
@@ -379,7 +393,8 @@ last_fallback: str | None = None
 # log says when the newest build is not the one being installed.
 _LATEST_REDIRECT = ("GitHub's API could not be reached; this component came "
                     "from its project's 'latest release' redirect, so the "
-                    "exact version is whatever that points at today.")
+                    "exact version is whatever that redirect points at, and "
+                    "it may be a test build.")
 
 
 def _cache_path(url: str) -> Path:
@@ -530,7 +545,10 @@ def feeder_releases() -> list[tuple[str, bool]]:
         return release_tags_html(FEEDER_REPO, pages=2)[:15]
     if not isinstance(rels, list):
         return []
-    return [(r.get("tag_name", "?"), bool(r.get("prerelease")))
+    # _is_prerelease, not the flag alone: the dropdown and "newest release"
+    # have to call the same builds test builds, or the list says "release"
+    # beside a tag the install below it steps over.
+    return [(r.get("tag_name", "?"), _is_prerelease(r))
             for r in rels if not r.get("draft") and r.get("tag_name")]
 
 
@@ -539,8 +557,9 @@ def resolve_feeder(prerelease: bool = False, tag: str = "") -> tuple[str, dict[s
 
     `tag` pins one exact release. Otherwise `prerelease=True` takes the newest
     build of any kind, which is where the feeder's support for the newer
-    DLSS 5 add-on generations lives, and the default is the newest stable
-    release, exactly as GitHub's /latest reports it.
+    DLSS 5 add-on generations lives, and the default is the newest release
+    that is not a test build - by GitHub's flag or by the tag's own name,
+    because upstream publishes its betas with that flag turned off.
     """
     global last_fallback
     try:
@@ -555,7 +574,36 @@ def resolve_feeder(prerelease: bool = False, tag: str = "") -> tuple[str, dict[s
             rels = [r for r in rels if not r.get("draft")] if isinstance(rels, list) else []
             rel = rels[0] if rels else _json(FEEDER_API)
         else:
-            rel = _json(FEEDER_API)
+            # "Newest release" has to mean the same build on both paths, and
+            # GitHub's /latest is not it: since September the feeder's betas
+            # are published with prerelease=false, so /latest answered
+            # 1.16.0-beta.x while the github.com fallback, which reads the
+            # tag's own name, answered v0.15.1. Two paths, two answers - and
+            # that beta is one of the two things that changed on the machine
+            # in #325, where the crash stopped, and the build that would not
+            # compile DLSS5_Feed.fx in #348.
+            # A test build is named as one; the flag is upstream's to set and
+            # they do not. Betas stay one entry away: "newest pre-release".
+            rels = _json(FEEDER_LIST_API)
+            rels = [r for r in rels if not r.get("draft")] if isinstance(rels, list) else []
+            rel = next((r for r in rels if not _is_prerelease(r)), None)
+            if rel is None:
+                # Nothing but test builds in the newest 15, which upstream
+                # reaches in about a month at its present rate - six betas
+                # sit above v0.15.1 today. /latest here would hand back the
+                # very build this branch exists to step over, so walk the
+                # release pages instead: they go back twice as far.
+                try:
+                    want, assets = _feeder_html(False, "")
+                except Exception:
+                    want, assets = "", {}
+                if assets:
+                    last_fallback = ("The newest releases on GitHub's API "
+                                     "were all test builds; the feeder "
+                                     "release was read from github.com's "
+                                     "release pages instead.")
+                    return want, assets
+                rel = _json(FEEDER_API)
     except _NoSuchTag:
         raise RuntimeError(f"DLSS5-Feeder release {tag} is not on GitHub's "
                            f"release list (the newest 15 are checked).") from None
@@ -571,7 +619,16 @@ def resolve_feeder(prerelease: bool = False, tag: str = "") -> tuple[str, dict[s
                          "instead.")
         return want, assets
     assets = {a["name"]: a["browser_download_url"] for a in rel.get("assets", [])}
-    return rel.get("tag_name", "?"), assets
+    got = rel.get("tag_name", "?")
+    if not tag and not prerelease and _is_prerelease({"tag_name": got}):
+        # Every source there is has been asked and all of them answered with
+        # a test build. Installing one is better than installing nothing,
+        # and saying so is better than letting the settings claim this is
+        # the release line.
+        last_fallback = (f"Every recent DLSS5-Feeder release is a test "
+                         f"build; {got} was installed. Pick an exact "
+                         f"version under 'feeder build' to change that.")
+    return got, assets
 
 
 class _NoSuchTag(RuntimeError):
@@ -590,8 +647,16 @@ def _feeder_html(prerelease: bool, tag: str) -> tuple[str, dict[str, str]]:
     elif prerelease:
         want = tags[0][0] if tags else ""
     else:
-        want = latest_tag(FEEDER_REPO) or next(
-            (t for t, pre in tags if not pre), "")
+        # The tag's own name, for the reason in resolve_feeder: the /latest
+        # redirect follows the same flag the API does, and upstream
+        # publishes betas without it. So the redirect is the answer only
+        # when the page walk itself came back empty - "every tag on two
+        # pages is a test build" must not fall through to the one source
+        # that cannot tell, which is how this branch handed back a beta
+        # while the log said a release had been found.
+        want = next((t for t, pre in tags if not pre), "")
+        if not want and not tags:
+            want = latest_tag(FEEDER_REPO) or ""
     if not want:
         return "", {}
     return want, release_assets_html(FEEDER_REPO, want)

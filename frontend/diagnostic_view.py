@@ -2,7 +2,7 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QApplication, QDialog, QFrame, QHBoxLayout, QLabel,
                               QPlainTextEdit, QScrollArea, QSizePolicy, QTabWidget,
-                              QVBoxLayout, QWidget)
+                              QVBoxLayout, QWidget, QInputDialog)
 
 from .controls import Button
 from .diagnostic_text import NEXT_STEPS, translate
@@ -19,9 +19,10 @@ def _label(text, kind=""):
 
 
 class DiagnosticDialog(QDialog):
-    def __init__(self, result, game_name, chinese=True, parent=None):
+    def __init__(self, result, game_name, chinese=True, parent=None, allow_answer=False):
         super().__init__(parent)
         self.chinese = chinese
+        self.started_answer = None
         self.setWindowTitle(self.t("运行检查", "Session check"))
         self.resize(720, 580)
         screen = self.screen().availableGeometry()
@@ -63,15 +64,19 @@ class DiagnosticDialog(QDialog):
         if result.crash:
             crash = result.crash
             heading = self.t("近期崩溃记录", "Recent crash record") if result.related_crash else self.t("较早的崩溃记录", "Earlier crash record")
+            if getattr(result, "closing_crash", False):
+                heading = self.t("退出阶段异常（不计为运行中崩溃）", "Fault during closing (not counted against session)")
             frame, box = self.card(heading)
             box.addWidget(_label(self.t("时间（UTC）：", "Time (UTC): ") + str(crash.when)))
             box.addWidget(_label(self.t("程序：", "Program: ") + str(crash.exe)))
             box.addWidget(_label(self.t("出错模块：", "Faulting module: ") + str(crash.module)))
             box.addWidget(_label(self.t("错误码：", "Error code: ") + str(crash.code)))
-            box.addWidget(_label(self.t("时间关联不能确定崩溃原因；详细堆栈见原始记录。" if result.related_crash else
-                                        "早于当前运行记录，不用于判断本次运行是否成功。",
-                                        "Timing alone does not establish the cause; see the original report." if result.related_crash else
-                                        "Predates the current session and is not used to judge its outcome."), "muted"))
+            if getattr(result, "closing_crash", False):
+                note = self.t("异常出现在 OptiScaler 释放资源后的退出阶段，因此单独记录。如果游戏实际是自行退出，请补充运行情况。", "The fault followed OptiScaler teardown and is recorded separately. If the game actually closed itself, add what happened.")
+            else:
+                note = self.t("时间关联不能确定崩溃原因；详细堆栈见原始记录。" if result.related_crash else "早于当前运行记录，不用于判断本次运行是否成功。",
+                              "Timing alone does not establish the cause; see the original report." if result.related_crash else "Predates the current session and is not used to judge its outcome.")
+            box.addWidget(_label(note, "muted"))
             body.addWidget(frame)
 
         # Keep upstream order within each group and never hide unfamiliar levels.
@@ -134,6 +139,11 @@ class DiagnosticDialog(QDialog):
             copy.setText(self.t("已复制", "Copied"))
         copy.clicked.connect(copy_report)
         footer.addWidget(copy)
+        if allow_answer:
+            answer = Button(self.t("补充运行情况", "Add what happened"))
+            answer.setAutoDefault(False)
+            answer.clicked.connect(self.ask_started)
+            footer.addWidget(answer)
         footer.addStretch()
         close = Button(self.t("关闭", "Close"))
         close.clicked.connect(self.reject)
@@ -146,6 +156,14 @@ class DiagnosticDialog(QDialog):
             apply.setAutoDefault(False)
             apply.clicked.connect(self.accept)
             layout.addWidget(apply)
+
+    def ask_started(self):
+        choices = [self.t("游戏自行退出", "The game closed itself"), self.t("游戏未能启动", "The game never started")]
+        text, accepted = QInputDialog.getItem(self, self.t("补充运行情况", "Add what happened"),
+            self.t("如果检查结果与实际情况不符，请补充本次运行情况：", "If the check does not match what happened, describe this launch:"), choices, 0, False)
+        if accepted:
+            self.started_answer = "closed itself" if text == choices[0] else "never started"
+            self.done(2)
 
     def t(self, zh, en):
         return zh if self.chinese else en

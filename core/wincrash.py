@@ -213,3 +213,69 @@ def describe(c: Crash | None, proxy: str = "",
             f"another mod. Close overlays (RivaTuner, Discord, GeForce "
             f"Experience) and try again; if it persists, that module is the "
             f"one to chase.")
+
+
+# How Windows starts an executable, as opposed to how it ended. An elevated
+# process gets none of the Vulkan layers registered per user - the loader
+# skips HKEY_CURRENT_USER when it runs with a high-integrity token - and
+# that is where this tool registers ReShade's layer. So a DXVK game that
+# starts elevated runs DXVK and never ReShade, and the folder looks exactly
+# like a layer that failed to register (#400, #348, #238).
+COMPAT_LAYERS = r"Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers"
+
+
+def elevated() -> bool:
+    """Is this process running as administrator? False when it cannot tell."""
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def start_flags(exe_path) -> str:
+    """The compatibility flags Windows applies to this exe, and where.
+
+    "RUNASADMIN (per user)" when the exe is set to run as administrator in
+    its Properties -> Compatibility tab (or by a launcher that writes the
+    same value), "" when nothing is set or it cannot be read. The value is
+    keyed by the exe's full path; both registry views are read for the
+    machine-wide one, because a 32-bit writer lands in the other.
+    """
+    try:
+        import winreg
+    except ImportError:
+        return ""
+    want = str(exe_path or "")
+    if not want:
+        return ""
+    found: list[str] = []
+    views = ((winreg.HKEY_CURRENT_USER, 0, "per user"),
+             (winreg.HKEY_LOCAL_MACHINE, getattr(winreg, "KEY_WOW64_64KEY", 0),
+              "all users"),
+             (winreg.HKEY_LOCAL_MACHINE, getattr(winreg, "KEY_WOW64_32KEY", 0),
+              "all users"))
+    for hive, view, label in views:
+        try:
+            with winreg.OpenKey(hive, COMPAT_LAYERS, 0,
+                                winreg.KEY_READ | view) as k:
+                i = 0
+                while True:
+                    try:
+                        name, value, _t = winreg.EnumValue(k, i)
+                    except OSError:
+                        break
+                    i += 1
+                    if str(name).lower() != want.lower():
+                        continue
+                    flags = " ".join(w for w in str(value).split() if w != "~")
+                    if flags and f"{flags} ({label})" not in found:
+                        found.append(f"{flags} ({label})")
+        except OSError:
+            continue
+    return "; ".join(found)
+
+
+def runs_as_admin(flags: str) -> bool:
+    """Does a start_flags() answer make every start of the exe elevated?"""
+    return "RUNASADMIN" in str(flags or "").upper()

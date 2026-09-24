@@ -8,6 +8,23 @@ import re
 
 
 _MESSAGES = r"""
+You said the game closed itself.|你反馈游戏自行退出，请按以下顺序排查。
+You said the game never started.|你反馈游戏未能启动，请按以下顺序排查。
+Neural rendering ran, then the game closed itself - see below for what to take out first.|神经渲染曾运行，但游戏随后自行退出。请按下方建议排查并还原组件。
+OptiScaler runs the model around the game's own upscaler. Turn DLSS (or FSR 2 or later, or XeSS) on in the game's graphics menu - FSR 1.0 does not count, it makes no call OptiScaler can take over. With no upscaler running there is nothing for neural rendering to attach to, which is what the overlay means by 'waiting for the upscaler to run'. If the game has no upscaler at all, use the feeder route.|请在游戏内开启 DLSS、FSR 2 及以上版本或 XeSS，OptiScaler 才能接入神经渲染。FSR 1.0 不适用。若游戏没有这些选项，请使用 Feeder 路线。
+Streamline recorded an exception earlier in the session.|Streamline 在本次运行较早阶段记录了异常。
+Switched on and hooked, but the game never called DLSS.|已开启并接入，但游戏没有调用 DLSS。
+The game closed itself and nothing here recorded why - see below for what to take out first.|游戏自行退出，现有记录未说明原因。请按下方建议排查并还原组件。
+The game crashed - Streamline wrote a crash dump.|游戏发生崩溃，Streamline 已写入崩溃转储。
+The game crashed with OptiScaler loaded - Streamline caught the exception.|游戏在加载 OptiScaler 后崩溃，Streamline 捕获了异常。
+The game never called DLSS - turn it on in the game's own settings, or use the optiscaler route.|游戏没有调用 DLSS。请在游戏内开启 DLSS，或尝试 OptiScaler 路线。
+The game never started with this install in - see below for what to take out first.|安装后游戏未能启动。请按下方建议排查并还原组件。
+The logs show an earlier session that ran; this time the game never started - see below for what to take out first.|日志中的成功运行属于较早的一次，本次游戏未能启动。请按下方建议排查并还原组件。
+The release installed here was not an OptiScaler build - install again.|此前安装的发行包不是 OptiScaler，请重新安装组件。
+this is the RTX 40 MFG package - install again for the standard one|此前安装的是 RTX 40 多帧生成包，请重新安装以使用标准包。
+this is a test build - 'newest release' no longer picks one; install again|此前安装的是测试版；默认渠道现已排除测试版，请重新安装组件。
+the proxy this install wrote is not in the folder - install again|安装记录中的代理 DLL 已不在游戏目录，请重新安装组件。
+
 Frames reach the 64-bit helper, and only its own log says what came back - look in host64\dlss5-feed-host.log.|画面已传入 64 位辅助程序，请查看 host64\dlss5-feed-host.log 确认处理结果。
 The 32-bit Vulkan layer is being discarded as a duplicate name - install again to rewrite it.|32 位 Vulkan 层因名称重复被忽略，请重新安装组件修复。
 The neural add-on in the helper never created the DLSS 5 feature.|辅助程序中的神经渲染插件未创建 DLSS 5 功能。
@@ -168,7 +185,7 @@ Two NGX hooks are loaded: the DLSS 5 add-on and neural-upstream.|DLSS 5 插件�
 Two add-ons process the frame: standalone-dlssnr and the renodx-dlss5 add-on.|standalone-dlssnr 和 renodx-dlss5 同时处理画面。
 Two add-ons process the frame: the DLSS 5 add-on and standalone-dlssnr.|DLSS 5 插件和 standalone-dlssnr 同时处理画面。
 """
-MESSAGES = dict(line.split("|", 1) for line in _MESSAGES.strip().splitlines())
+MESSAGES = dict(line.split("|", 1) for line in _MESSAGES.strip().splitlines() if line.strip())
 
 # Captures are inserted unchanged. Full matching avoids translating an excerpt
 # from an unrelated message whose wording happens to share a prefix.

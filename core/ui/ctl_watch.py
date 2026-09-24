@@ -17,7 +17,8 @@ from .. import autopilot, diagnose, dlss, gpu, installer, log, prefs, verdicts
 from ..lookout import Lookout
 from . import theme as T
 from . import win
-from .ctl_game import crash_is_this_session, fault_in_this_folder
+from .ctl_game import (CLOSING_FAULT_NOTE, crash_is_this_session, fault_in_this_folder, fault_while_closing,
+                       note_closing_fault)
 
 
 class WatchControl:
@@ -177,6 +178,11 @@ class WatchControl:
             return
         if crash is not None and not crash_is_this_session(crash, g.install_dir):
             crash = None                         # an earlier launch's fault
+        closing = ""
+        if crash is not None and fault_while_closing(g.install_dir, crash):
+            # #289: shown - under the answer, and in the report - and not counted
+            closing = note_closing_fault(rep, crash)
+            crash = None
         mod = str(getattr(crash, "module", "") or "") if crash is not None else ""
         said = str(rep.verdict)
         if crash is not None:
@@ -189,6 +195,19 @@ class WatchControl:
                         + (f" in {mod}." if mod else "."))
         working = said.startswith("Working") and crash is None
         nxt, why = self.next_route(g, rep, offered)
+        if said != str(rep.verdict):
+            # #294 #295: the report prints rep.verdict, and it said "Working."
+            # beside Windows' fault record - the correction lived in `said`
+            # alone. After next_route, which reads the verdict the offered
+            # routes were worked out from.
+            if getattr(rep, "never_ran", False):
+                rep.never_ran = False
+                rep.findings = diagnose.drop_never_ran(
+                    [f for f in rep.findings if not f.title.startswith("If you DID start it")
+                     and not f.title.startswith("The likeliest reason:")])
+            rep.verdict = said
+            rep.add(diagnose.BAD, f"Windows recorded {getattr(crash, 'exe', 'the game')} faulting"
+                    + (f" in {mod}." if mod else "."))
         entry = {"ok": working, "said": said[:90], "fps": None}
         if nxt:
             # Kept with the answer, so "try <route>" outlives a restart. Every
@@ -204,6 +223,9 @@ class WatchControl:
                            "findings": [(f.level, f.title) for f in rep.findings if f.level in ("bad", "warn")][:3]}
         self.write("")
         self.write(f"=== {g.name} closed: {said} ===", "ok" if working else "warn")
+        if closing:
+            self.write(f"[--]   {closing}")
+            self.write(CLOSING_FAULT_NOTE)
         title = f"{g.name} closed"
         if crash is not None:
             text = "it crashed" + (f" in {mod}" if mod else "") + (f" - {why}" if why else "")

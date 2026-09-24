@@ -68,9 +68,10 @@ def _helper_verdict(rep: Report, htext: str) -> bool:
     uplift = re.findall(r"NeuralUplift=(\d)", h)
     off = bool(uplift) and uplift[-1] == "0"
     who = _consumer(h)
-    # "(ReShade.log is unavailable)" is the helper saying it could not look,
-    # not that nothing was there.
-    no_nr = not off and "unavailable" not in said \
+    # "(ReShade.log is unavailable)" - "unknown (this process's ReShade.log
+    # could not be opened ...)" from 1.16.0-beta.5 - is the helper saying it
+    # could not look, not that nothing was there.
+    no_nr = not off and "unavailable" not in said and "could not be opened" not in said \
         and ("did not intercept" in said or "feature 18 failed" in said)
     if not removed and not no_nr:
         return False

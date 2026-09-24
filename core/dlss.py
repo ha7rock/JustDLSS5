@@ -691,7 +691,10 @@ def _detect_routes(install_dir: Path, folder: Path, api: str,
                     "add-on is 64-bit and a 32-bit process cannot load it, so "
                     "the feeder's host64 helper process is the only way in."
                     + (" DirectX 9 is translated to Vulkan by DXVK first."
-                       if api == "DX9" else ""))
+                       if api == "DX9" else
+                       " DirectX 8 is translated to Vulkan by DXVK first "
+                       "(its d3d8.dll on its d3d9.dll)."
+                       if api == "DX8" else ""))
         return s
 
     if api == "DX9":

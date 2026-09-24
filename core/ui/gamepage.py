@@ -208,8 +208,15 @@ class GamePage(Page):
             v = a.verdict_of(g)
             n_stale = a.stale.get(str(g.install_dir), 0)
             if n_stale:
-                lines.append((T.AMBER, f"{n_stale} installed part{'s have' if n_stale != 1 else ' has'} a newer "
-                                       f"build - press update"))
+                # Not "a newer build": a part can need installing again
+                # while its version number has not moved at all - the
+                # package behind it changed (#196, #364), or the release
+                # line it came from was never meant to be installed (#325).
+                # components.summary(), printed under 'check versions', says
+                # which of the two it is; this line only has a count.
+                lines.append((T.AMBER, f"{n_stale} installed part"
+                                       f"{'s need' if n_stale != 1 else ' needs'} "
+                                       f"installing again - press update"))
             elif v:
                 lines.append((T.OK if v.get("ok") else T.WARN,
                               ("last run: " + ("working" if v.get("ok") else v.get("said", "needs a look")))
@@ -362,7 +369,7 @@ class GamePage(Page):
             # an installed game with newer parts is still installed: the
             # update leads, and play and the check stay beside it
             btn(f"update ({n_stale})", a.install, glyph="download", kind="primary", enabled=not entering and ok,
-                tip="installs again on the same route and settings, with the newer parts")
+                tip="installs again on the same route and settings, with the current parts")
             btn("play", a.start_game, glyph="play", enabled=not getattr(a, "launching", False), tip=play_tip)
             btn("did it work?", a.diagnose, glyph="check", tip=work_tip)
         elif g.installed:

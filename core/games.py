@@ -735,7 +735,7 @@ def _prefer_real_exe(g: Game) -> None:
         g.exe = top
 
 
-APIS = ("DX9", "DX10", "DX11", "DX12", "Vulkan", "OpenGL")
+APIS = ("DX8", "DX9", "DX10", "DX11", "DX12", "Vulkan", "OpenGL")
 
 
 def api_override(folder: Path) -> str:
@@ -783,6 +783,22 @@ def set_bitness_override(folder: Path, bitness: int | None) -> None:
     prefs.set_("bitness_override", d)
 
 
+def emu_api(g: Game, api: str, why: str) -> tuple[str, str]:
+    """What an emulator that cannot present through Direct3D really draws with.
+
+    eden.exe is a Qt program whose imports read as DX12: the Direct3D routes
+    were offered, and the person had to know to set Vulkan by hand before the
+    feeder was even recommended (#352). melonDS and mGBA are OpenGL only; the
+    rest offer Vulkan, and the profile's own hint is what says which. One
+    place, because 'auto' is decided in three: enrich(), the settings'
+    "back to auto", and the dim label beside the dropdown.
+    """
+    if g is not None and g.emu is not None and not g.emu.d3d and str(api).upper().startswith("DX"):
+        return ("Vulkan" if "vulkan" in g.emu.renderer_hint.lower() else "OpenGL",
+                f"{g.emu.name} draws with Vulkan or OpenGL only (its imports read as {api})")
+    return api, why
+
+
 def enrich(g: Game, chosen: bool = False) -> Game:
     """Pick the executable and detect its architecture / graphics API.
 
@@ -827,6 +843,8 @@ def enrich(g: Game, chosen: bool = False) -> Game:
                 g.emu = prof
                 if g.source == "Manual":
                     g.name = f"{prof.name} ({prof.system})"
+        if not forced:
+            g.api, g.api_why = emu_api(g, g.api, g.api_why)
     except pe.PEError as e:
         g.error = str(e)
         log.write(f"could not read {g.name}: {e}", "warn")

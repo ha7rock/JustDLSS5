@@ -235,7 +235,7 @@ class UpstreamTests(unittest.TestCase):
     def test_selected_fork_preview_stays_offline(self):
         def cached(url):
             name = "presr-fixture" if url == optiscaler.PRESR_API else "other"
-            return [{"tag_name": name, "assets": [{"name": name + ".zip", "browser_download_url": "https://example.invalid/fixture.zip"}]}]
+            return [{"tag_name": name, "assets": [{"name": "OptiScaler-" + name + ".zip", "browser_download_url": "https://example.invalid/fixture.zip"}]}]
         with patch.object(optiscaler.sources, "cached_json", side_effect=cached):
             self.assertIn("presr-fixture", optiscaler.archive_name(optiscaler.PRESR))
 

@@ -23,7 +23,8 @@ from .layer import _dxvk_files
 
 
 __all__ = [
-    "_block", "_dlss_record_root", "_last_lines", "_presence",
+    "CLOSED_ITSELF", "NEVER_STARTED", "_block", "_dlss_record_root",
+    "_last_lines", "_presence", "answered", "said_started",
     "_reshade_excerpt", "_their_provider", "_tool_log_lines", "issue_body"
 ]
 
@@ -274,11 +275,32 @@ def _presence(install_dir: Path, man: dict, route: str, game_root=None) -> list[
     if route == "optiscaler":
         # Three builds can be installed here and their packages differ; a
         # report that does not say which one is unanswerable.
+        # ...and the release it took, which is the difference between an
+        # install that never wrote a proxy and one something emptied (#364).
+        _c = man.get("components")
+        _otag = str((_c.get("optiscaler") if isinstance(_c, dict) else "") or "")
         extra.append("- optiscaler build: "
-                     + (str(man.get("opti_build") or "") or "Dagherbou"))
+                     + (str(man.get("opti_build") or "") or "Dagherbou")
+                     + (f" ({_otag})" if _otag else ""))
     else:
         names.append("ReShade.ini")
     names += _dxvk_files(man)
+    # DXVK's own log beside the game is the proof it ran - the one thing
+    # "DXVK ran and ReShade did not" rests on - and the report never said
+    # whether there was one, so no replay could reproduce that verdict and
+    # #400 came back as "not started since the install".
+    if man.get("dxvk") and man.get("exe"):
+        try:
+            from .. import dxvk as _dxvk
+            since = _installed_at(install_dir)
+            for n in _dxvk.logs_for(Path(str(man.get("exe")))):
+                if (install_dir / n).is_file():
+                    extra.append(f"- {n}: present ("
+                                 + ("written since the install"
+                                    if _fresh(install_dir / n, since) else
+                                    "from before the install") + ")")
+        except Exception:
+            pass
     # On the 32-bit feeder route the DLSS runtimes live in host64/ beside the
     # helper, not next to the game - looking for them in the folder reported
     # "nvngx_dlssnr.dll: MISSING" on installs that were perfectly fine.
@@ -378,6 +400,130 @@ def _work_area(install_dir, route: str, game=None) -> str:
         return ""
 
 
+# What the person answers in the report dialog (reportui.STARTED), in the
+# words the report prints them. The old template's "yes / no / it closed
+# itself", left untouched, is no answer at all.
+CLOSED_ITSELF = "closed itself"
+NEVER_STARTED = "never started"
+
+# Verdicts that send the person to look at something in a running game -
+# the overlay, a panel, a checkbox - or that call the session fine. Said to
+# somebody whose game closed itself, or never started, every one of them is
+# wrong: there is no running game to look at (#412, and the top class of
+# the backlog - "we ask the person to look in the overlay", 21 of 121).
+_LOOK_IN_GAME = ("confirm in the", "check '", "the switch is on",
+                 "open the overlay", "the only live picture", "Working.",
+                 "Add-ons loaded", "Inconclusive", "Loaded and set up")
+
+
+_OVERLAY_ASK = re.compile(r"\b(open|press|check)\b[^.]{0,60}\b(overlay|panel|tab)\b",
+                          re.I)
+
+
+def said_started(text: str) -> str:
+    """CLOSED_ITSELF, NEVER_STARTED or "" from a report's own answer line."""
+    low = str(text or "").lower()
+    if not low or "yes / no" in low:
+        return ""
+    if "never started" in low:
+        return NEVER_STARTED
+    if "closed itself" in low:
+        return CLOSED_ITSELF
+    return ""
+
+
+def answered(rep: Report, started: str, presence=(), kind: str = "game") -> Report:
+    """The verdict, corrected by what the person saw.
+
+    `started` is their answer to "did the game start?" and `presence` the
+    report's own "Files in the folder" lines. A game that closed itself or
+    never started cannot be checked in an overlay, and a "Working." over it
+    is the report being wrong, not the person: that verdict is replaced by
+    what to take out first, from what the folder says was changed. Every
+    verdict that names something the logs show is kept.
+
+    `kind` is the install's ("game" or "video"). A video player is set up
+    from the video page, not a game's, and has no routes to swap between,
+    so its verdict is left as it is rather than given steps that name
+    controls it does not have.
+    """
+    said = said_started(started)
+    if not said or not rep.verdict or kind == "video" \
+            or not any(n in rep.verdict for n in _LOOK_IN_GAME):
+        return rep
+    lines = [str(x).strip().lstrip("- ") for x in (presence or ())]
+    swaps = [x.split(":", 1)[0] for x in lines if "updated on the dlss page" in x]
+    ours_swapped = [x.split(":", 1)[0] for x in lines
+                    if "swapped to" in x and "backed up" in x]
+    ran = rep.verdict.startswith("Working")
+    steps = []
+    if swaps:
+        steps.append(f"undo what the dlss page changed first - "
+                     f"{', '.join(swaps[:3])} - with 'restore original' on "
+                     f"that page, and start the game once: a runtime swap is "
+                     f"the first suspect when a game stops starting")
+    if ours_swapped:
+        steps.append(f"this install also swapped {', '.join(ours_swapped[:3])} "
+                     f"(uninstall puts the game's own back)")
+    steps.append("press uninstall on the game's page and start the game "
+                 "once with nothing of ours in it. If it closes the same "
+                 "way, it is not this install. If it runs, install again "
+                 "with another route - where the window shows 'what other "
+                 "people found', it says which worked for this game")
+    what = ("closed itself" if said == CLOSED_ITSELF else "never started")
+    detail = (("The logs say neural rendering ran, and you say the game "
+               f"{what} - so the session did not end well, whatever the "
+               "logs got as far as. " if ran else
+               f"The logs could not show why, and the check they would "
+               f"have asked for needs a running game. ")
+              + "In this order: " + "; then ".join(steps) + ".")
+    # The findings that said the same thing as the verdict - go and look in
+    # the overlay - go with it, or the report prints the correction above
+    # the advice it corrects (#171's shape). Evidence stays.
+    rep.findings = [f for f in rep.findings
+                    if not (f.level == INFO and _OVERLAY_ASK.search(
+                        f"{f.title} {f.detail}"))]
+    rep.findings.insert(0, Finding(BAD, f"You said the game {what}.", detail))
+    # Whole strings, so core/verdicts.py can stage them by their own words.
+    if ran and said == CLOSED_ITSELF:
+        rep.verdict = ("Neural rendering ran, then the game closed itself - "
+                       "see below for what to take out first.")
+    elif ran:
+        # The logs hold a session that drew, and this start never came up:
+        # they describe an earlier launch than the one being reported.
+        rep.verdict = ("The logs show an earlier session that ran; this time "
+                       "the game never started - see below for what to take "
+                       "out first.")
+    elif said == CLOSED_ITSELF:
+        rep.verdict = ("The game closed itself and nothing here recorded why "
+                       "- see below for what to take out first.")
+    else:
+        rep.verdict = ("The game never started with this install in - see "
+                       "below for what to take out first.")
+    return rep
+
+
+def _start_lines(game) -> str:
+    """The report's lines on how Windows starts the game, or "".
+
+    Printed only when there is something to say, and read back by the
+    replay (the header keys "starts as administrator" and "this tool").
+    """
+    from .. import wincrash as _wc
+    out = ""
+    try:
+        exe = getattr(game, "exe", None)
+        flags = _wc.start_flags(exe) if exe else ""
+        if flags:
+            out += f"- starts as administrator: {flags}\n" \
+                if _wc.runs_as_admin(flags) else f"- compatibility flags: {flags}\n"
+        if _wc.elevated():
+            out += "- this tool: running as administrator\n"
+    except Exception:
+        pass
+    return out
+
+
 def issue_body(version: str, gpu_name: str, sm, driver: str, game, route: str,
                last_diag, autopilot_tail: str, autopilot_log_path,
                install_dir, last_error: str = "", session_error: str = "",
@@ -389,7 +535,27 @@ def issue_body(version: str, gpu_name: str, sm, driver: str, game, route: str,
     add-ons wrote answer the first five questions a maintainer would ask, so
     the reply can be a fix instead of "please attach ReShade.log".
     """
+    d = Path(install_dir) if install_dir else None
+    presence: list[str] = []
+    if d is not None and d.is_dir():
+        try:
+            presence = _presence(d, _manifest(d), route,
+                                 getattr(game, "folder", None))
+        except Exception:
+            presence = []
     diag = ""
+    # What the person answered decides whether a "look in the overlay"
+    # verdict can stand: with a game that closed itself or never started
+    # there is nothing to look at (#412). A copy, so the window's own
+    # diagnosis is not rewritten behind its back.
+    if last_diag is not None and answers:
+        try:
+            import copy
+            last_diag = answered(copy.deepcopy(last_diag),
+                                 str(answers.get("started") or ""), presence,
+                                 str(getattr(game, "kind", "") or "game"))
+        except Exception:
+            pass
     if last_diag is not None:
         try:
             diag = f"\n**Diagnosis**: {last_diag.verdict}\n" + "".join(
@@ -431,15 +597,15 @@ def issue_body(version: str, gpu_name: str, sm, driver: str, game, route: str,
         + (f"- windows event: {crash.exe} faulted in {crash.module} "
            f"{crash.code} at {crash.when} UTC\n"
            if crash is not None and getattr(crash, "module", "") else "")
+        # How Windows starts the game: an elevated game gets no per-user
+        # Vulkan layer, which is the whole DXVK route (#400, #348, #238).
+        + _start_lines(game)
         + diag[:1200])
 
     files = ""
     reshade = feed = opti = ""
-    d = Path(install_dir) if install_dir else None
     if d is not None and d.is_dir():
-        man = _manifest(d)
-        files = "\n**Files in the folder**\n" + "\n".join(
-            _presence(d, man, route, getattr(game, "folder", None))) + "\n"
+        files = "\n**Files in the folder**\n" + "\n".join(presence) + "\n"
         reshade = _tail(d / RESHADE_LOG, 250_000)
         feed = _tail(d / FEED_LOG, 100_000)
         if route == "optiscaler":

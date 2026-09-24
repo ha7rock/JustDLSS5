@@ -129,7 +129,7 @@ class LibraryPage(Page):
             x += wid + T.px(30)
         # view menu: architecture, hidden games, sort, scan at start
         k.link(width - pad, y, "view", self.view_menu, glyph="more", anchor="e", tags=tags,
-               tip="sort, 32/64-bit, hidden games")
+               tip="sort, 32/64-bit, hidden games, sidebar pages")
         right = width - pad - T.px(90)
         if a.arch != "all" or a.show_hidden or a.sort:
             bits = [dict(ARCH)[a.arch]] if a.arch != "all" else []
@@ -205,6 +205,15 @@ class LibraryPage(Page):
         c.create_text(pad, top + T.px(40), text=msg, font=T.mono(12), fill=T.MUTED, anchor="w", tags=tags)
         k.link(pad, top + T.px(76), "show all games", self._reset_view, glyph="refresh", colour=T.AMBER,
                hot=T.TEXT, tags=tags)
+        # A row of its own, and only when a search found nothing: that is
+        # the moment a game the scanners do not know about is being looked
+        # for, and until now the only way in was a dropdown behind 'scan'
+        # (#374 - "please add a button that can search for a game").
+        if q:
+            k.link(pad, top + T.px(106), "choose a folder  -  add it by hand",
+                   a.pick_folder, glyph="folder", tags=tags,
+                   tip="for a game no store reports - pick the folder its .exe is in")
+            return top + T.px(190)
         return top + T.px(160)
 
     # ------------------------------------------------------------ a card
@@ -332,7 +341,8 @@ class LibraryPage(Page):
         # all leaves both alone
         todo, _skipped = a.update_targets()
         if todo:
-            items.append((f"update all  -  {len(todo)} with newer parts", a.update_all))
+            items.append((f"update all  -  {len(todo)} to install again",
+                          a.update_all))
         x1, y1, x2, y2 = self.c.bbox(self.scan_btn.tag)
         self.kit.menu(x2 - T.px(380), y2 + T.px(4), items, opener=self.scan_btn.tag, width=T.px(380))
 
@@ -360,8 +370,22 @@ class LibraryPage(Page):
         online = _covers.online()
         items.append((("\u2022 " if online else "  ") + "look up covers online (sends game names)",
                       lambda: a.set_online_art(not online)))
+        hidden = self.shell.rail_hidden()
+        shown = [p for p in self.shell.HIDEABLE if p not in hidden]
+        items.append(("sidebar pages  -  " + (", ".join(shown) if shown else "all hidden"),
+                      lambda: self.shell.root.after(1, self.sidebar_menu)))
         vx2 = self.c.canvasx(self.c.winfo_width())
         self.kit.menu(vx2 - T.px(44) - T.px(400), T.px(144), items, width=T.px(400), max_rows=16)
+
+    def sidebar_menu(self):
+        """Which of video, remix and vr the rail shows (#293)."""
+        sh = self.shell
+        hidden = sh.rail_hidden()
+        items = [(("\u2022 " if p not in hidden else "  ") + f"{p} in the sidebar",
+                  lambda p=p: sh.set_rail_hidden(p, p not in hidden))
+                 for p in sh.HIDEABLE]
+        vx2 = self.c.canvasx(self.c.winfo_width())
+        self.kit.menu(vx2 - T.px(44) - T.px(400), T.px(144), items, width=T.px(400))
 
     def _toggle_hidden(self):
         self.app.show_hidden = not self.app.show_hidden

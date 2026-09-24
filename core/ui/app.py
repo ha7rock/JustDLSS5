@@ -233,10 +233,12 @@ class App(LibraryControl, GameControl, VideoControl, WatchControl, DlssControl):
             except Exception:
                 last_error = None
         body = diagnose.issue_body(
-            update.VERSION, name, sm, drv, g, route, self._last_diag if g is not None else None,
+            update.VERSION, name, sm, drv, g, route,
+            (getattr(self._last_diag, "answered_from", None) or self._last_diag) if g is not None else None,
             log.tail(60, 6000), log.path(), install_dir, last_error=last_error,
             session_error=log.last_error(), answers=answers,
             crash=self._last_crash if g is not None else None)
+        App._reprint_answered(self, g, route, answers)
         try:
             url = f"{REPO_URL}/issues/new?title={quote(title)}&body={quote(body)}"
             if len(url) > 7800:
@@ -250,6 +252,57 @@ class App(LibraryControl, GameControl, VideoControl, WatchControl, DlssControl):
             self.root.clipboard_append(body)
             self.shell.info("report a bug", "The details are on the clipboard - paste them into a new issue on "
                                             "GitHub.")
+
+    def _reprint_answered(self, g, route: str, answers) -> None:
+        """What the report now says, on the screen and the card as well.
+
+        The report corrects a "look in the overlay" or "Working." verdict
+        when the person says the game closed itself or never started (#412).
+        Left there, the window kept the old verdict and the game's card kept
+        saying it worked - one answer in the report, another on screen."""
+        from .. import diagnose
+        shown = self._last_diag
+        # Always from the logs' own reading: a second report in the same
+        # session that says "it started and ran" puts it back (gate 2.0.5).
+        rep = getattr(shown, "answered_from", None) or shown
+        if g is None or rep is None or not answers:
+            return
+        try:
+            import copy
+            d = Path(g.install_dir)
+            presence = diagnose._presence(d, diagnose._manifest(d), route,
+                                          getattr(g, "folder", None))
+            new = diagnose.answered(copy.deepcopy(rep), str(answers.get("started") or ""),
+                                    presence, str(getattr(g, "kind", "") or "game"))
+        except Exception:
+            return
+        if new.verdict == shown.verdict:
+            return
+        if new.verdict != rep.verdict:
+            new.answered_from = rep
+        self._last_diag = new
+        self.write("")
+        self.write("=== with what you said ===", "head")
+        self.write(f"> {new.verdict}", "warn")
+        for f_ in new.findings:
+            if f_ in rep.findings:
+                continue
+            mark = {"ok": "[ok]  ", "warn": "[!!]  ", "bad": "[fail]", "info": "[--]  "}[f_.level]
+            self.write(f"{mark} {f_.title}", {"ok": "ok", "warn": "warn", "bad": "err"}.get(f_.level, ""))
+            if f_.detail:
+                self.write(f"        {f_.detail}")
+        # The panel above the log is the third place the verdict is printed
+        # (gate 2.0.5: it kept a green "Working." over the correction).
+        if isinstance(getattr(self, "result", None), dict) and self.result.get("kind") == "diagnosis":
+            working = new.verdict.startswith("Working")
+            self.result = dict(self.result, ok=working, title=new.verdict,
+                               findings=[(f.level, f.title) for f in new.findings
+                                         if f.level in ("bad", "warn")][:3])
+        try:
+            self._record_verdict(new, self._measured)
+            self.refresh("game", soft=True)
+        except Exception:
+            pass
 
     def suggest(self) -> None:
         from urllib.parse import quote

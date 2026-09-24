@@ -221,7 +221,7 @@ def describe(opt: Options) -> list[str]:
         # names the build without it describes only half of what it does.
         out.append(f"optiscaler build: {opt.opti_build}"
                    + (" (neural pass before the upscaler)"
-                      if opt.opti_build == optiscaler.PRESR else ""))
+                      if optiscaler.is_presr(opt.opti_build) else ""))
     if opt.dxvk:
         out.append("dxvk")
     return out

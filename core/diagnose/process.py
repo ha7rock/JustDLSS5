@@ -29,6 +29,70 @@ __all__ = ["_loaded_note", "_foreign_hooks", "_name_foreign_hooks"]
 _LOADS_ON_CREATE = ("nvngx_dlssnr.dll",)
 
 
+# The clock of a line that belongs to a LAUNCH: "04:12:59:122 [55536] | INFO |
+# Registered add-on ...", or ReShade's own first line. No date in it. Not any
+# line: the log's last one is written when the game closes, and measuring
+# from it called every session longer than two minutes "started again".
+_LOG_CLOCK = re.compile(r"^(\d{2}):(\d{2}):(\d{2}):\d+ [^\n]*"
+                        r"(?:Initializing crosire's ReShade|Registered add-on)", re.M)
+
+# A launch later than the sighting by less than this is the same launch seen
+# from its two ends: the snapshot is taken as the game comes up and ReShade
+# registers its add-ons a moment afterwards (#250: 49 s apart). Beyond it,
+# the game was started again after the snapshot was taken (#287: the log ends
+# with a launch three minutes after it).
+_SAME_LAUNCH_S = 120
+
+
+def _sighting_is_older_than_the_last_launch(install_dir: Path, at) -> bool:
+    """Did the game start again after this snapshot was taken?
+
+    The module list is the strongest evidence the diagnosis has - it is the
+    running game rather than a log - but only about the run it was taken
+    from. #287's was taken at 04:10, between a launch at 04:09 and the one
+    the log ends with at 04:12, and every line built from it still opened
+    "When it last ran": a finished launch read out as the current one, its
+    add-ons reported missing from a session that was over.
+
+    ReShade's own clock carries no date, so this compares times of day and
+    says nothing when they are hours apart rather than guessing a day.
+    """
+    try:
+        if not at:
+            return False
+        log = install_dir / "ReShade.log"
+        if not log.is_file():
+            return False
+        # A launch after the snapshot wrote the log after it. A log last
+        # written before it is an earlier day's, whatever its clock reads -
+        # and today's list is then the only evidence there is.
+        if log.stat().st_mtime <= float(at):
+            return False
+        text = log.read_text(encoding="utf8", errors="replace")[-250_000:]
+        marks = _LOG_CLOCK.findall(text)
+        if not marks:
+            return False
+        h, m, s = (int(x) for x in marks[-1])
+        seen_at = datetime.fromtimestamp(float(at))
+        last = seen_at.replace(hour=h, minute=m, second=s, microsecond=0)
+    except (OSError, TypeError, ValueError, OverflowError):
+        return False
+    gap = (last - seen_at).total_seconds()
+    # Only a gap on the same day, and only a plausible one: a log whose last
+    # line reads hours after the snapshot is a log from another day.
+    return _SAME_LAUNCH_S < gap < 3 * 3600
+
+
+# A file this tool writes -> what its add-on calls itself when ReShade
+# registers it. A file that is not here is never taken for registered.
+_REGISTERS_AS = (("bridge", ("dlss 5 bridge",)), ("feed", ("dlss 5 feed",)),
+                 ("renodx-dlss5.", ("dlss 5 neural rendering",)),
+                 ("renodx-dlss.", ("renodx dlss",)),
+                 ("nvngx.dll.addon", ("pre-upscale", "upstream")),
+                 ("standalone-dlssnr", ("standalone dlss-nr",)),
+                 ("rtx40mfg", ("mfg unlock",)))
+
+
 def _loaded_note(install_dir: Path, man: dict, rep: Report) -> None:
     """Say what the process really had in it, where the log cannot.
 
@@ -54,6 +118,21 @@ def _loaded_note(install_dir: Path, man: dict, rep: Report) -> None:
         return
     if not seen or seen.get("refused"):
         return
+    if _sighting_is_older_than_the_last_launch(install_dir, seen.get("at")):
+        return
+    # The session's own log outranks an early look (#352): ReShade registered
+    # both add-ons and ran them for eleven minutes, and two lines under that
+    # the snapshot - taken as the process came up - said they were not loaded.
+    # File by file: the bridge registering says nothing about the feed, and an
+    # HDR mod or the MFG unlock registering says nothing about either.
+    reg = [f.title.lower() for f in rep.findings
+           if f.level == OK and f.title.startswith("ReShade loaded add-on")]
+
+    def registered(n: str) -> bool:
+        said = next((t for k, t in _REGISTERS_AS if k in n), ())
+        return any(s in t for s in said for t in reg)
+    need = [n for n in need if not (str(n).lower().endswith((".addon64", ".addon32"))
+                                    and registered(str(n).lower()))]
     later = [n for n in need if str(n).lower() in _LOADS_ON_CREATE]
     need = [n for n in need if n not in later]
     loaded = [n for n in (seen.get("ours") or [])]
@@ -131,7 +210,8 @@ def _name_foreign_hooks(rep: Report, foreign) -> Report:
     if rep.verdict.startswith("Working"):
         # Frames came through with it loaded; it did not stop the pass.
         for f in rep.findings:
-            if f.level == BAD and f.title.startswith("Another DLSS hook was loaded"):
+            if f.level == BAD and f.title.startswith(("Another DLSS hook was loaded",
+                                                      "Another DLSS tool's add-on")):
                 f.level = WARN
         return rep
     if rep.verdict.startswith(_CANNOT_SEE):

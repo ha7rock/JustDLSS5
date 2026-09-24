@@ -72,6 +72,17 @@ def sm_for_name(name: str) -> int | None:
     n = name.upper()
     if "NVIDIA" not in n and "GEFORCE" not in n and "RTX" not in n and "QUADRO" not in n:
         return None
+    # Workstation cards name the architecture, and their model numbers are
+    # not GeForce series: "RTX 2000 Ada" is Ada (sm_89), not Turing, and
+    # "RTX 5000 Ada" is not an RTX 50 (gate 2.0.5).
+    if re.search(r"\bADA\b", n):
+        return 89
+    if "BLACKWELL" in n:
+        return 120
+    if re.search(r"RTX\s*A\d{3,4}\b", n):
+        return 86                  # RTX A2000-A6000: Ampere
+    if "QUADRO RTX" in n or "TITAN RTX" in n:
+        return 75                  # Quadro RTX 3000-8000, TITAN RTX: Turing
     m = re.search(r"(?:RTX|GTX)\s*(\d{3,4})", n)
     if m:
         num = int(m.group(1))

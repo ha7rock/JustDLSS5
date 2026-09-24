@@ -829,7 +829,14 @@ class Field:
             self._show_placeholder(True)
 
     def get(self) -> str:
-        return "" if self._ph_on else self.entry.get()
+        if self._ph_on:
+            return ""
+        try:
+            return self.entry.get()
+        except tk.TclError:
+            # #296 #300: a page keeps its field across redraws and asks it for
+            # the text to carry over - after the entry went with the old page
+            return self._last
 
     def focus(self, append: str = ""):
         self.entry.focus_set()

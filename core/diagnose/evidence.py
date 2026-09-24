@@ -24,7 +24,7 @@ from .layer import (_addon_in, _dxvk_files, _layer_clash,  # noqa: F401
 __all__ = [
     "_addon_switch", "_addons", "_anything_of_ours", "_area",
     "_attached", "_biggest", "_crash_verdict", "_dlss_mod",
-    "_dxvk_gone", "_family", "_fault_chain",
+    "_dxvk_gone", "_engine_says_not_dxgi", "_family", "_fault_chain",
     "_feed_shaders", "_fresh", "_game_ran", "_in",
     "_install_crash", "_installed_at", "_last_feed_session", "_last_session",
     "_launcher_installed", "_layer_gone", "_live_evidence", "_loaded_block",
@@ -361,6 +361,8 @@ def _live_evidence(install_dir: Path, man: dict, rep: Report) -> bool:
         rep.never_ran = False
         return True
 
+    if _wrong_api_verdict(install_dir, man, rep, running, app):
+        return True
     rep.add(BAD, f"{running} is running and has loaded none of the files "
                  f"here.",
             f"Windows lists every DLL in a process, and not one of this "
@@ -529,6 +531,9 @@ def _remembered_evidence(install_dir: Path, man: dict, rep: Report,
         rep.never_ran = False
         return True
 
+    if _wrong_api_verdict(install_dir, man, rep, running,
+                          "app" if man.get("kind") == "video" else "game"):
+        return True
     rep.add(BAD, f"{running} ran at {when} with none of this folder's files "
                  f"loaded.",
             f"Windows lists every DLL in a process and not one of this "
@@ -538,6 +543,62 @@ def _remembered_evidence(install_dir: Path, man: dict, rep: Report,
             f"the game's settings.")
     rep.verdict = (f"{running} ran at {when} and loaded nothing from this "
                    f"folder - try another proxy name.")
+    rep.never_ran = False
+    return True
+
+
+# Proxy names a game only loads if it draws through DXGI (D3D10/11/12).
+_DXGI_FAMILY = ("dxgi.dll", "d3d11.dll", "d3d12.dll", "d3d10.dll")
+
+
+def _engine_says_not_dxgi(install_dir: Path, man: dict) -> tuple[str, str] | None:
+    """(api, why) when the engine beside the exe draws with something a
+    DXGI-family proxy never sees, and the install put one there anyway.
+
+    #403: POSTAL 2 is Unreal Engine 2, its renderer is D3DDrv/D3D9Drv, and
+    the detection of the time found no graphics import and assumed DXGI. A
+    process that loads none of our files is then not "the wrong proxy
+    name" - no DXGI name would ever load. Asked of the same engine rule the
+    scan uses now (pe._engine_default), so this and a fresh scan agree.
+    """
+    proxy = str(man.get("proxy") or "").lower()
+    exe = str(man.get("exe") or "")
+    if proxy not in _DXGI_FAMILY or not exe:
+        return None
+    try:
+        from .. import pe
+        hit = pe._engine_default(install_dir / exe)
+    except Exception:
+        return None
+    if not hit or hit[0] in ("DX10", "DX11", "DX12"):
+        return None
+    return hit
+
+
+def _wrong_api_verdict(install_dir: Path, man: dict, rep: Report,
+                       running: str, app: str) -> bool:
+    """Say the install was made for the wrong renderer, when it was."""
+    hit = _engine_says_not_dxgi(install_dir, man)
+    if hit is None:
+        return False
+    api, why = hit
+    rep.add(BAD, f"This install went in for a DXGI game, and {running} "
+                 f"draws with {api if api != 'Unknown' else 'a renderer nothing here reaches'}.",
+            f"The engine beside the exe says so: {why}. A "
+            f"{man.get('proxy')} proxy is only ever loaded by a Direct3D "
+            f"10/11/12 game, so no name in 'reshade loads as' would have "
+            f"worked. "
+            + ("The scan reads this engine: run 'full rescan' in the scan "
+               "menu so the game is read again, then install again - it is "
+               "set up for that renderer." if api != "Unknown" else
+               "No route reaches this renderer. If the game's ini offers an "
+               "OpenGL or Direct3D 9 RenderDevice, switch to it and run "
+               "'full rescan' in the scan menu."))
+    rep.verdict = (f"{running} ran and draws with {api}, not DXGI - 'full "
+                   f"rescan', then install again."
+                   if api != "Unknown" else
+                   f"{running} ran on a renderer this tool cannot reach - "
+                   f"see below.")
     rep.never_ran = False
     return True
 

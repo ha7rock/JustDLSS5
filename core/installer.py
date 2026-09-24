@@ -249,8 +249,9 @@ class Options:
     # OptiScaler route its calls become OptiScaler's input and DLSS runs in
     # their place, so the tool also puts a nvngx_dlss.dll in the folder.
     upscaler: str = ""
-    # The feeder's pre-releases are where support for the newer DLSS 5 add-on
-    # generations lives; the stable release only accepts renodx-dlss5 4.55.
+    # The feeder's pre-releases are where support for the newest DLSS 5
+    # add-on generations lands first. "newest release" means the release
+    # line (#325, #348); this asks for the beta line instead.
     feeder_prerelease: bool = False
     feeder_tag: str = ""                    # "" = stable or newest pre-release
     dxvk: bool = False                      # run a D3D11 game on Vulkan via DXVK
@@ -378,6 +379,12 @@ def reliability(g: games.Game, path: str = FEEDER,
         return BETA, ("The bridge reproduces the DLSS contract on a private "
                       "D3D12 session. Fewer moving parts than the feeder, but "
                       "less proven.")
+    if g.api == "DX8":
+        return EXPERIMENTAL, (
+            "DirectX 8 through DXVK's d3d8.dll, then the same path as a 32-bit "
+            "DirectX 9 game. It has not been run here - if you try it, "
+            "'share the result' under "
+            "'did it work?' tells the next person how it went.")
     if g.api == "DX9":
         return EXPERIMENTAL, (
             "DirectX 9 is the least reliable path. The game runs through "
@@ -503,7 +510,8 @@ def uses_dxvk(g: games.Game, opt: "Options") -> bool:
     D3D11/D3D12 device to build its contract on, ReShade on a raw D3D9
     device cannot give it one, and DXVK is the only translation left since
     dgVoodoo2 was dropped. So a DX9 game takes it whether or not the box is
-    ticked - the routes that handle D3D9 themselves are excluded above.
+    ticked - the routes that handle D3D9 themselves are excluded above. A
+    DX8 game the same: DXVK's d3d8.dll runs on its own d3d9.dll (#403).
     """
     return bool(dxvk_api(g, opt))
 
@@ -532,7 +540,7 @@ def dxvk_api(g: games.Game, opt: "Options") -> str:
             return ""
     # the tick still decides (--no-dxvk, and the box in the game's settings);
     # what the fix above restores is the default, not the choice
-    return api if (opt.dxvk or api == "DX9") else ""
+    return api if (opt.dxvk or api in ("DX9", "DX8")) else ""
 
 
 def via_dxvk(g: games.Game, opt: "Options") -> games.Game:
@@ -554,6 +562,12 @@ def check_supported(g: games.Game) -> tuple[bool, str]:
                        "executable, so they cannot be read from it.")
     if g.bitness not in (32, 64):
         return False, "Could not read the architecture."
+    if g.api == "DX8" and g.bitness == 64:
+        # Set by hand: detection never says DX8 for a 64-bit exe, because
+        # there is no 64-bit Direct3D 8 (gate 2.0.5).
+        return False, ("DirectX 8 is 32-bit only, and this executable is "
+                       "64-bit - choose the api it really draws with in the "
+                       "game's settings.")
     if g.api == "Vulkan":
         # Reachable since the bridge landed: it mirrors the game's DLSS
         # contract onto a private D3D12 session. ReShade still has to be
@@ -2608,6 +2622,14 @@ def install(g: games.Game, opt: Options, on_step=None, on_prog=None, on_log=None
                 f"{sources.FEEDER_DX10_MIN} or newer in 'feeder build' - that is "
                 f"the first build with the D3D10 relay - and install again.")
 
+    if opt.path == OPTI:
+        # The same rule for the RTX 40 MFG package: raised inside the
+        # OptiScaler step it came after the previous route was taken out,
+        # so a working install was lost to a card check (gate 2.0.5).
+        why_card = optiscaler.card_refusal(opt.opti_build, gpu.detect()[1])
+        if why_card:
+            raise InstallError(why_card)
+
     previous = _previous_route(root)
     if previous and previous != opt.path:
         log(f"[0] removing the previous {previous} install first")
@@ -2895,8 +2917,16 @@ def install(g: games.Game, opt: Options, on_step=None, on_prog=None, on_log=None
             if oproxy != optiscaler.DEFAULT_PROXY and not opt.opti_proxy:
                 log(f"      {optiscaler.DEFAULT_PROXY} is already taken here, "
                     f"installing as {oproxy} instead")
-            orel = optiscaler.resolve(opt.opti_build)
-            rep.components["optiscaler"] = orel[0]
+            # The RTX 40 MFG package on any other card was refused at the top
+            # of install(), before the previous route came out.
+            try:
+                orel = optiscaler.resolve(opt.opti_build)
+            except RuntimeError as e:
+                # A sentence written to be read, not a crash: without this
+                # it reaches the window as traceback.format_exc() and the
+                # tool offers to file a bug report about its own refusal,
+                # and the reason never reaches the manifest notes either.
+                raise InstallError(str(e)) from e
             if opt.opti_build == optiscaler.FORK:
                 log(f"      y4my4my4m's fork, {orel[0]}")
                 rep.notes.append("OptiScaler is y4my4my4m's fork of the DLSS-NR "
@@ -2914,10 +2944,33 @@ def install(g: games.Game, opt: Options, on_step=None, on_prog=None, on_log=None
                                  "three passes (OptiScaler.ini: Passes=). Not "
                                  "run in a game here - if it misbehaves, "
                                  "install again with the DLSS-NR build.")
-            for f in optiscaler.install(root, proxy=oproxy, dl=dl, log=log,
-                                        backup=lambda p: _backup(p, rep, root),
-                                        release=orel):
-                rep.written.append(f)
+            elif opt.opti_build == optiscaler.PRESR_MFG:
+                log(f"      wilsjo2's fork with RTX 40 MFG, {orel[0]}")
+                rep.notes.append("OptiScaler is wilsjo2's RTX 40 MFG package: "
+                                 "the neural pass runs before super resolution, "
+                                 "over one to three passes (OptiScaler.ini: "
+                                 "Passes=), and its RTX 40 unlock is switched "
+                                 "on ([DLSSG] AdaMfgUnlock=true), so a game "
+                                 "with its own DLSS frame generation can offer "
+                                 "3x/4x on an RTX 40. Not run in a game here - "
+                                 "if frame generation misbehaves, install again "
+                                 "with \"wilsjo2's fork\" in 'optiscaler build'.")
+            try:
+                for f in optiscaler.install(root, proxy=oproxy, dl=dl, log=log,
+                                            backup=lambda p: _backup(p, rep, root),
+                                            release=orel):
+                    rep.written.append(f)
+            except RuntimeError as e:      # the archive carried no OptiScaler
+                raise InstallError(str(e)) from e
+            # After the files are down, not before: an install that is
+            # refused (#364 - the release carried no OptiScaler package)
+            # would otherwise leave a manifest naming a version this folder
+            # never had, and the diagnosis reads that manifest. The other
+            # components still record before their download, deliberately:
+            # only this one has a refusal of its own that leaves the folder
+            # untouched, and a manifest written complete=False already
+            # outranks them all in the diagnosis.
+            rep.components["optiscaler"] = orel[0]
             _, sm_ = gpu.detect()
             note = optiscaler.requirements_note(sm_)
             if note:
@@ -2975,12 +3028,33 @@ def install(g: games.Game, opt: Options, on_step=None, on_prog=None, on_log=None
 
             begin("OptiScaler configuration")
             nr_settings = dict(opt.nr)
-            if opt.opti_build == optiscaler.PRESR:
+            if optiscaler.is_presr(opt.opti_build):
                 # The build is offered for this placement; the placement is
                 # a setting, and its default is off (#81).
                 for k, v in optiscaler.PRESR_BEFORE_SR.items():
                     nr_settings.setdefault(k, v)
             optiscaler.enable_nr(root, log, settings=nr_settings)
+            if opt.opti_build == optiscaler.PRESR_MFG:
+                # The package ships its unlock switched off (#286).
+                optiscaler.enable_mfg_unlock(root, log)
+                # What the unlock needs from the game, said at install rather
+                # than found out in it (gate 2.0.5): a DLSS frame-generation
+                # runtime of the game's own, and no FSR frame generation in
+                # its place - FGOutput=fsrfg leaves it nothing to act on.
+                try:
+                    _fg_file = mfg.has_dlssg(Path(getattr(g, "folder", None) or root), root)
+                except Exception:
+                    _fg_file = "?"
+                if not _fg_file:
+                    rep.warnings.append("the RTX 40 MFG unlock acts on the game's own DLSS "
+                                        "frame generation, and this game ships none - the "
+                                        "neural pass still runs, multi-frame generation "
+                                        "will not appear")
+                if opt.fg and g.api == "DX12":
+                    rep.warnings.append("'frame generation' (FSR 3.1) is on: FSR frame "
+                                        "generation takes the place of DLSS frame "
+                                        "generation, so the RTX 40 MFG unlock has nothing "
+                                        "to act on - untick it to use MFG")
             # A keyboard without an Insert key has no way into the overlay,
             # which is where neural rendering is switched on (#88).
             optiscaler.set_overlay_key(root, _overlay_key_pref(), log)
@@ -3240,8 +3314,9 @@ def install(g: games.Game, opt: Options, on_step=None, on_prog=None, on_log=None
                     rep.notes.append(f"renodx-dlss5 pinned to {want}: newer "
                                      f"builds stall on OpenGL")
                 if not want and opt.path == FEEDER:
-                    # The feeder's stable release only accepts 4.55; anything
-                    # newer overlaps it and the DLSS feature dies in CreateFeature.
+                    # Feeder builds below 0.8.0-beta.3 accept only 4.55;
+                    # anything newer overlaps them and the DLSS feature dies
+                    # in CreateFeature. Above that, nothing is pinned here.
                     want = sources.renodx_for_feeder(rep.components.get("feeder", ""))
                     if want:
                         log(f"      DLSS5-Feeder {rep.components.get('feeder')} accepts "
@@ -3756,6 +3831,14 @@ def uninstall(g: games.Game, on_log=None) -> list[str]:
                     pass
         else:
             log("RTX Remix is installed here: d3d9.dll is its runtime, left alone.")
+        # A DirectX 8 game's DXVK front end (#403). Only when it IS DXVK: a
+        # d3d8.dll beside an old game is as often a wrapper somebody put
+        # there (d3d8to9, a widescreen fix) as it is ours.
+        try:
+            if dxvk.is_dxvk(root / "d3d8.dll"):
+                files.append("d3d8.dll")
+        except Exception:
+            pass
         # A plain nvngx.dll is the standalone add-on's bridge only when the
         # add-on is there too; on its own it could be somebody's OptiScaler.
         if (root / STANDALONE_ADDON).is_file():
