@@ -117,6 +117,22 @@ def _key(v: str) -> tuple:
     return tuple(int(n) for n in nums[:4])
 
 
+def _proxy_gone(root: Path, man: dict) -> bool:
+    """Did this install write an OptiScaler proxy that is no longer there?
+
+    Read off the folder rather than off the version on the record, so it
+    holds whatever emptied it. Only says yes when the manifest names the
+    file: an install from before the proxy was recorded says nothing.
+    """
+    proxy = str(man.get("proxy") or "")
+    if not proxy or not man.get("complete", True):
+        return False
+    try:
+        return not (root / proxy).is_file()
+    except OSError:
+        return False
+
+
 def check(root: Path) -> list[Item]:
     """What is installed in this folder against what is current.
 
@@ -155,6 +171,40 @@ def check(root: Path) -> list[Item]:
         # either.
         if name == "dlssnr":
             outdated = False
+        elif name == "feeder" and not man.get("feeder_tag") \
+                and not man.get("feeder_prerelease"):
+            # Asked for "newest release" and got a test build: until 2.0.4
+            # that setting followed GitHub's pre-release flag, which this
+            # project publishes with turned off (#325, #348). The numbers go
+            # the wrong way - 1.16.0-beta.5 is above v0.15.1 - so nothing
+            # else here would ever say so, and the person who never reads a
+            # release note would sit on a beta forever.
+            # latest != installed as well: when github.com holds no stable
+            # release either, the resolver's last resort hands back this
+            # very build, and a mark that installing again cannot clear is
+            # worse than no mark at all.
+            if latest != installed \
+                    and sources._is_prerelease({"tag_name": installed}):
+                out.append(Item(LABELS.get(name, name), installed, installed,
+                                True, note=("this is a test build - 'newest "
+                                            "release' no longer picks one; "
+                                            "install again")))
+                continue
+            outdated = (latest != installed and _key(latest) > _key(installed))
+        elif name == "optiscaler" and _proxy_gone(root, man):
+            # #364: the fork published a package that was not OptiScaler,
+            # this folder got it, and no proxy was ever written. The version
+            # on the record cannot say so - a tag is not the package, and
+            # one of the forks really does publish under the tag "nightly" -
+            # but the folder itself can: the manifest names the proxy this
+            # install wrote, and it is not there. Whatever removed it
+            # (nothing written, antivirus, somebody tidying up), the answer
+            # is the same, and nothing else here would ever say it: the
+            # version number on the record is perfectly current.
+            out.append(Item(LABELS.get(name, name), installed, installed, True,
+                            note=("the proxy this install wrote is not in "
+                                  "the folder - install again")))
+            continue
         elif name == "optiscaler" and man.get("opti_build"):
             # A fork publishes its own numbers on its own release page;
             # comparing them with Dagherbou's says nothing, and an
@@ -181,7 +231,10 @@ def check(root: Path) -> list[Item]:
             # send people back to the faulting one: 4.55 on driver 616.64+
             # (every evaluate faults with 4.6/4.7), 4.60 on OpenGL (4.70
             # stalls). See sources.py.
-            from . import gpu, sources
+            # sources is imported at the top of the module; naming it here
+            # too made it a local of this whole function, and the branch
+            # above that reads it raised UnboundLocalError.
+            from . import gpu
             cap = None
             if gpu.driver_at_least(sources.DRIVER_FAULT_MIN):
                 cap = sources.DRIVER_FAULT_RENODX_PIN

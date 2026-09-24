@@ -28,6 +28,17 @@ CHAIN = (
         "The drive was full",
         "Nothing is installed in this folder",
         "No install record here and no ReShade.log",
+        # #364: the manifest said OptiScaler was installed and no proxy was
+        # ever beside the executable - the package that was unpacked into
+        # the folder held no OptiScaler.dll at all. Ours, and stage 1.
+        # LIMIT: the first of these two is also printed when a proxy WAS
+        # written and something removed it afterwards, which is stage 2's
+        # shape (the person's antivirus). It is counted here because an
+        # install of ours that wrote nothing looks exactly the same from
+        # the folder, and blaming a virus scanner on a guess is the one
+        # answer this project does not give.
+        "OptiScaler is not in the game folder",
+        "The release installed here was not an OptiScaler build",
     )),
     ("2 a file went missing after it", "the person's antivirus", (
         "is missing from the folder - reinstall",      # ReShade's proxy, DXVK
@@ -47,10 +58,17 @@ CHAIN = (
         "The install went beside a launcher",
         "is running and has loaded nothing from this folder",
         "and loaded nothing from this folder",
+        # #328: "The game loads d3d9.dll from another folder - ours is never reached."
+        "from another folder - ours is never",
         "Not run yet, or the Remix runtime never",
         "It looks as though it ran and nothing this install wrote was loaded",
         "and no log was written - ReShade's Vulkan layer is not reaching the game",
         "and no log was written - the proxy is reached and ReShade is not",
+        # 2.0.5: how Windows started the game kept the per-user layer out
+        # (#400, #348, #238), and an engine a DXGI proxy never reaches (#403)
+        "runs as administrator, so ReShade's Vulkan layer is skipped",
+        "not DXGI - 'full rescan', then install again",
+        "on a renderer this tool cannot reach",
     )),
     ("4 the game refused the hook", "upstream", (
         "The game refused OptiScaler's swapchain",
@@ -70,13 +88,24 @@ CHAIN = (
     ("6 set up, not switched on", "the person", (
         "Set up correctly, but not switched on yet",
         "Loaded and set up; no neural frame yet",
+        # #390: switched on and hooked, and the game made no DLSS call
+        "The game never called DLSS",
         "OptiScaler loaded; neural rendering not switched on",
+        "The add-ons are loaded and the neural pass is switched off",
         "ReShade never gave it an effect runtime",
     )),
     ("7 loaded, and we cannot see", "us", (
         "Inconclusive - open the overlay",
         "Add-ons loaded. Confirm in",
+        "Add-ons loaded and the switch is on",
         "Frames reach the 64-bit helper, and only its own log",
+        # The report's own correction when the person said the game closed
+        # itself or never started (diagnose.answered, #412): the logs could
+        # not see why, and what to take out first is the answer.
+        "Neural rendering ran, then the game closed itself",
+        "this time the game never started - see below",
+        "The game closed itself and nothing here recorded why",
+        "The game never started with this install in",
     )),
     ("8 the add-on crashed", "upstream", (
         "The feed crashed after starting",
@@ -85,6 +114,8 @@ CHAIN = (
         "its neural add-on never created the DLSS 5 feature",
         "the add-on crashed creating the feature",
         "It started, then the feed stopped",
+        # #420, #20: Streamline's crash handler wrote a dump on this route
+        "The game crashed with OptiScaler loaded",
     )),
     ("9 the model refused", "upstream", (
         "OptiScaler loaded, but the model refused or failed",
@@ -119,6 +150,11 @@ ROUTE_FAILED = ("3 nothing of ours loaded", "4 the game refused the hook",
 NOT_A_ROUTE = (
     "The install went beside a launcher",
     "Inconclusive - the feed did not get far enough",
+    # How the game was started, and a game read as the wrong renderer: the
+    # next route goes in through the same start and the same wrong reading.
+    "runs as administrator, so ReShade's Vulkan layer is skipped",
+    "not DXGI - 'full rescan', then install again",
+    "on a renderer this tool cannot reach",
 )
 
 _SECOND_HOOK = "another dlss hook was loaded beside ours"
@@ -164,3 +200,38 @@ def why_next(verdict: str, route: str) -> str:
         "8 the add-on crashed": f"the {route} add-on crashed",
         "9 the model refused": f"the model refused on the {route} route",
     }.get(name, "")
+
+
+# The stages where the tool cannot tell from the logs whether the person saw
+# DLSS 5, so a shared result has to take the person's word for it. Before
+# 2.0.5 "share the result" wrote "failed" for every one of these: a route
+# that logs no frames (renodx, native, bridge) could never share a success,
+# and #414's "WORKED FINE" went into the list as a failure - 27 of the first
+# 230 shared results were such an unseen outcome filed as failed.
+UNSEEN = ("7 loaded, and we cannot see", "11 a second DLSS hook beside ours")
+_PERSON_SAID_FAILED = (
+    "Neural rendering ran, then the game closed itself",
+    "this time the game never started - see below",
+    "The game closed itself and nothing here recorded why",
+    "The game never started with this install in",
+)
+
+
+def outcome(verdict: str) -> str | None:
+    """"worked", "failed", or None when only the person can say.
+
+    Read by 'share the result' before it writes a record, and by the
+    workflow that adds the records up, so the two agree on which verdicts
+    are not an answer."""
+    name = stage(verdict)[0]
+    if name == "0 working":
+        return "worked"
+    # Stage 7 for the backlog, but written from the person's own "it closed
+    # itself" / "it never started" (diagnose.answered): that answer is the
+    # outcome, and asking "did the picture show?" after it asks twice.
+    low = str(verdict or "").lower()
+    if any(s.lower() in low for s in _PERSON_SAID_FAILED):
+        return "failed"
+    if name in UNSEEN or name.startswith("unmapped") or name == "no verdict":
+        return None
+    return "failed"

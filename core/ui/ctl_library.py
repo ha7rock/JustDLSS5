@@ -727,8 +727,8 @@ class LibraryControl:
                               else "nothing updated -" + left)
             return
         if not self.shell.ask(f"update {len(targets)} game{'s' if len(targets) != 1 else ''}?",
-                              "Each is installed again with the same route and settings, with the "
-                              "newest components. Backups and your own files are kept." + left,
+                              "Each is installed again with the same route and settings. "
+                              "Backups and your own files are kept." + left,
                               "update", "cancel"):
             return
         self.busy = True

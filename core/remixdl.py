@@ -206,7 +206,9 @@ def install(mod_url: str, game_dir: Path, log=None, progress=None) -> list[str]:
                 if target.is_file() and not bak.exists():
                     try:
                         bak.write_bytes(target.read_bytes())
-                        backups.append(str(bak.relative_to(game_dir)).replace("\\", "/"))
+                        # from the member's own name: `target` is resolved, and
+                        # relative_to raises for a folder behind a junction (#306)
+                        backups.append((rel + BACKUP_SUFFIX).replace("\\", "/"))
                     except OSError:
                         log(f"      WARNING: could not back up {rel}")
                 # on the record before the first byte: a copy that fails half

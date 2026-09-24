@@ -4,7 +4,7 @@ GUI:            dlss5-autopilot.exe
 Command line:   dlss5-autopilot.exe "D:\Games\Game" [--check | --remove]
                                                     [--route native|upstream|optiscaler|renodx|bridge|feeder|standalone|remix]
                                                     [--dxvk | --no-dxvk] [--remix-swap] [--vr]
-                                                    [--opti-build y4my4my4m|wilsjo2]
+                                                    [--opti-build y4my4my4m|wilsjo2|wilsjo2-mfg]
                 dlss5-autopilot.exe --video ["D:\DLSS5 Player"]  the video player
 
 --dxvk runs a D3D11 game on Vulkan through DXVK, with ReShade as a Vulkan
@@ -23,10 +23,12 @@ either way. The registration is per user rather than per game, and the
 last VR uninstall removes it. Untried with a headset here.
 
 --opti-build applies to --route optiscaler only and picks a fork other
-than Dagherbou's: y4my4my4m (multi-pass, multi-frame generation) or
+than Dagherbou's: y4my4my4m (multi-pass, multi-frame generation),
 wilsjo2 (the neural pass before the upscaler - installed with that
-placement switched on, which is off in the fork's own default). Neither
-has been run here.
+placement switched on, which is off in the fork's own default), or
+wilsjo2-mfg (the same, from that fork's RTX 40 multi-frame generation
+package; refused on a card known not to be an RTX 40). None of them has been
+run here.
 """
 from __future__ import annotations
 

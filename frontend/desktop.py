@@ -23,6 +23,7 @@ from .help_text import explanation
 from .about import NAME, VERSION, REPOSITORY
 from . import feedback, updates
 from .diagnostic_view import DiagnosticDialog
+from .diagnostic_text import translate
 
 
 def column(parent=None, margins=0, spacing=12):
@@ -528,6 +529,7 @@ class MainWindow(QMainWindow):
         build_labels = {
             "": self.t("Dagherbou（默认）", "Dagherbou (default)"),
             "y4my4my4m": self.t("y4my4my4m · RTX 40 多帧生成", "y4my4my4m · RTX 40 MFG"),
+            "wilsjo2-mfg": self.t("wilsjo2 · PreSR + RTX 40 多帧生成（实验性）", "wilsjo2 · PreSR + RTX 40 MFG (experimental)"),
             "wilsjo2": self.t("wilsjo2 · PreSR（实验性，未实测）", "wilsjo2 · PreSR (experimental, untested)"),
         }
         for key, description in optiscaler.BUILDS.items():
@@ -959,6 +961,12 @@ class MainWindow(QMainWindow):
         self.nr_style.setEnabled(route == dlss.OPTI)
         self.opti_proxy.setEnabled(route == dlss.OPTI)
         self.opti_build.setEnabled(route == dlss.OPTI)
+        for index in range(self.opti_build.count()):
+            key = self.opti_build.itemData(index)
+            allowed = not optiscaler.card_refusal(key, self.inspection.gpu_sm)
+            self.opti_build.model().item(index).setEnabled(allowed)
+            if key == optiscaler.PRESR_MFG:
+                self.opti_build.setItemData(index, self.t("仅适用于 RTX 40。需要游戏原生 DLSS 补帧；开启 FSR 补帧时多帧生成不生效。", "RTX 40 only. Requires native DLSS frame generation; MFG does not work with FSR frame generation."), Qt.ItemDataRole.ToolTipRole)
         vr_available = route not in (dlss.OPTI, dlss.REMIX) and (self.current.game.bitness or 64) == 64
         self.vr_check.setEnabled(vr_available)
         if not vr_available:
@@ -1218,9 +1226,19 @@ class MainWindow(QMainWindow):
             return
         def done(result):
             self._append_log(result.text)
-            DiagnosticDialog(result, entry.game.name, self.chinese, self).exec()
+            self._show_diagnostic(entry, result)
         self._submit(lambda emit: self.service.diagnose(entry), done,
                      busy=True, title=self.t("正在检查安装与运行…", "Checking installation and session…"))
+
+    def _show_diagnostic(self, entry, result):
+        dialog = DiagnosticDialog(result, entry.game.name, self.chinese, self, allow_answer=True)
+        dialog.exec()
+        answer = dialog.started_answer
+        dialog.deleteLater()
+        if answer in ("closed itself", "never started"):
+            self._submit(lambda emit: self.service.diagnose(entry, started=answer),
+                         lambda updated: self._show_diagnostic(entry, updated), busy=True,
+                         title=self.t("正在更新检查结果…", "Updating session check…"))
 
     def component_versions(self):
         entry = self.current
@@ -1242,7 +1260,7 @@ class MainWindow(QMainWindow):
             table.horizontalHeader().setMinimumSectionSize(50)
             table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
             for index, item in enumerate(items):
-                for col, value in enumerate((item.name, item.installed or self.t("未检测到", "Not detected"), item.latest or self.t("未知", "Unknown"), (self.t("旧版安装使用了不同的 OptiScaler 包，请重新安装组件。", "The older installation used a different OptiScaler package. Reinstall components.") if item.note and item.name == "OptiScaler" else item.note))):
+                for col, value in enumerate((item.name, item.installed or self.t("未检测到", "Not detected"), item.latest or self.t("未知", "Unknown"), (translate(item.note, self.chinese) or item.note))):
                     cell = QTableWidgetItem(value)
                     cell.setToolTip(value)
                     table.setItem(index, col, cell)

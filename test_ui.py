@@ -156,10 +156,11 @@ class DesktopTests(unittest.TestCase):
         result = SessionResult("original", "fixture", dlss.OPTI, verdict="Working.")
         with patch.object(self.service, "diagnose", return_value=result, create=True), \
              patch("frontend.desktop.DiagnosticDialog") as dialog:
+            dialog.return_value.started_answer = None
             self.window.diagnose_selected()
             self.assertTrue(self.window.busy_job)
             self.drain()
-            dialog.assert_called_once_with(result, self.window.current.game.name, True, self.window)
+            dialog.assert_called_once_with(result, self.window.current.game.name, True, self.window, allow_answer=True)
             dialog.return_value.exec.assert_called_once()
         self.assertFalse(self.window.busy_job)
 

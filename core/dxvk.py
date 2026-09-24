@@ -38,6 +38,10 @@ API = "https://api.github.com/repos/doitsujin/dxvk/releases/latest"
 FILES_BY_API = {
     "DX11": ("dxgi.dll", "d3d11.dll"),
     "DX9": ("d3d9.dll",),
+    # DXVK's d3d8.dll is a front end on its own d3d9.dll - its import table
+    # names d3d9.dll - so both go beside the game, or d3d8 would load
+    # Windows' d3d9 and never reach Vulkan. Direct3D 8 is 32-bit only.
+    "DX8": ("d3d8.dll", "d3d9.dll"),
 }
 FILES = FILES_BY_API["DX11"]
 ALL_FILES = tuple(sorted({n for fs in FILES_BY_API.values() for n in fs}))
@@ -101,7 +105,8 @@ def logs_for(exe: Path | None) -> tuple[str, ...]:
     if exe is None:
         return ()
     stem = exe.stem
-    return (f"{stem}_dxgi.log", f"{stem}_d3d11.log", f"{stem}_d3d9.log")
+    return (f"{stem}_dxgi.log", f"{stem}_d3d11.log", f"{stem}_d3d9.log",
+            f"{stem}_d3d8.log")
 
 
 def resolve() -> tuple[str, str]:

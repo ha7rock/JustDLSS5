@@ -457,7 +457,11 @@ def extract_tree(zpath: Path, inner_dir: str, dest_dir: str, out_root: Path,
             target.parent.mkdir(parents=True, exist_ok=True)
             with z.open(n) as src, open(target, "wb") as out:
                 shutil.copyfileobj(src, out, 1 << 20)
-            written.append(target)
+            # In the caller's own spelling of the folder: inside() resolves,
+            # and a game reached through a junction (a Steam library moved
+            # with mklink) resolves to another path - every caller then does
+            # relative_to(out_root) and the install died there (#306).
+            written.append(Path(out_root) / dest_dir / tail)
     return written
 
 

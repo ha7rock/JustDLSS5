@@ -70,8 +70,11 @@ MAX_GAMES = 60
 
 FEED_PERF = re.compile(r"(\d+) frames: feed CPU ([\d.,]+) ms/frame"
                        r"[^\n]*?([\d.,]+) fps")
-OPTI_COST = re.compile(r"DLSS-NR cost:\s*([\d.,]+) ms total"
-                       r"(?:\s*=\s*([\d.,]+) ms model)?")
+# "cost: 7.41 ms total = 7.23 ms model", then wilsjo2's
+# "elapsed: 6.07 ms total, 5.91 ms model" (#168, #311) - the word and the
+# joiner are the fork's to change
+OPTI_COST = re.compile(r"DLSS-NR (?:cost|elapsed):\s*([\d.,]+) ms total"
+                       r"(?:\s*[=,]\s*([\d.,]+) ms model)?")
 
 
 @dataclass

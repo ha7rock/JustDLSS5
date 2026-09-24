@@ -38,7 +38,7 @@ GROUPS = (
         ("nr_style", "style", "dd", ""),
         ("hdr", "hdr", "dd", ""),
         ("feeder", "feeder build", "dd", "pin a feeder build; the matching add-on is chosen for it"),
-        ("opti_build", "optiscaler build", "dd", "which OptiScaler build goes in"),
+        ("opti_build", "optiscaler build", "dd", "the default takes the newest package on Dagherbou's release page; the forks are not run here; RTX 40 MFG is for RTX 40 cards only"),
     )),
     ("extras", (
         ("keep_dlss", "keep the game's own nvngx_dlss", "toggle",
@@ -47,7 +47,7 @@ GROUPS = (
         ("mfg", "multi-frame generation 3x/4x  (RTX 40)", "toggle",
          "dashdogy's RTX40MFG-Unlock with the Ultimate ASI Loader - research software"),
         ("dxvk", "run through DXVK (Vulkan)", "toggle",
-         "for games that close when ReShade loads inside them; DirectX 9 always goes through DXVK"),
+         "for games that close when ReShade loads inside them; DirectX 8 and 9 always go through DXVK"),
         ("vr", "VR headset (OpenXR layer)", "toggle", "registers ReShade's OpenXR layer so the pass runs on what the "
                                                       "headset shows"),
         ("remix_swap", "swap the Remix runtime", "toggle",

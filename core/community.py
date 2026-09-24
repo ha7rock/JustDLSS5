@@ -50,7 +50,8 @@ MARKER = "autopilot-report"
 
 def record(game, route: str, result: str, *, api: str = "", build: str = "",
            gpu_sm=None, gpu_name: str = "", driver: str = "",
-           version: str = "", measured: dict | None = None) -> dict:
+           version: str = "", measured: dict | None = None,
+           said_by: str = "") -> dict:
     """The one block a shared result carries. Nothing identifying in it.
 
     `measured` is what the session cost - the work area it ran at, the
@@ -60,6 +61,11 @@ def record(game, route: str, result: str, *, api: str = "", build: str = "",
     the card that is named here anyway. The keys are taken one at a time
     rather than merged wholesale, so a future caller cannot widen what
     leaves this machine by handing in a bigger dict.
+
+    `said_by` is "person" when the tool could not see the outcome and the
+    person answered it (verdicts.outcome() is None), and "crash" when
+    Windows recorded the game faulting: the list then knows where the answer
+    came from, not only what it was.
     """
     exe = getattr(getattr(game, "exe", None), "name", "") or ""
     rec = {
@@ -81,7 +87,39 @@ def record(game, route: str, result: str, *, api: str = "", build: str = "",
             # The work area is a whole percent - "a 75.0% work area" in a
             # published list reads as a precision nobody has.
             rec[key] = int(value) if key == "res" else round(float(value), 2)
+    if said_by in ("person", "crash"):
+        rec["by"] = said_by
     return rec
+
+
+def said_verdict(body: str) -> str:
+    """The verdict line a shared result was written with, or "".
+
+    issue_url() puts it between the first line and the "- api:" list. The
+    records before 2.0.5 carry no "by" key, and this line is the only thing
+    that says whether the tool could see the outcome it wrote down."""
+    parts = str(body or "").replace("\r\n", "\n").split("\n\n", 2)
+    if len(parts) < 3 or parts[1].lstrip().startswith("- api:"):
+        return ""
+    return parts[1].strip()
+
+
+def counts(rec: dict, body: str) -> bool:
+    """Does this record go into the list as an answer?
+
+    A record the person answered does. One written before 2.0.5 on a
+    verdict that could not see the outcome does not: those were filed as
+    "failed" whatever happened in the game (#414 said "WORKED FINE"), so
+    they are an unknown, and an unknown is left out rather than counted."""
+    from . import verdicts
+    if rec.get("by") in ("person", "crash"):
+        return True
+    said = said_verdict(body)
+    # Only the stages that cannot see. A verdict nobody mapped, or a body a
+    # reporter rewrote, is not evidence of an unseen outcome: 16 real
+    # results (#193 a "worked" among them) were left out on it (gate 2.0.5).
+    return (not said or verdicts.stage(said)[0] not in verdicts.UNSEEN
+            or verdicts.outcome(said) is not None)
 
 
 def block(rec: dict) -> str:
@@ -433,6 +471,10 @@ def issue_url(rec: dict, note: str = "") -> str:
     body = (f"**{rec.get('game') or rec.get('exe')}** {verb} on the "
             f"`{rec.get('route')}` route.\n\n"
             + (note.strip() + "\n\n" if note.strip() else "")
+            + ("The tool could not see this from the logs; the person who "
+               "played it said so.\n\n" if rec.get("by") == "person" else "")
+            + ("Windows recorded the game crashing in this session.\n\n"
+               if rec.get("by") == "crash" else "")
             + f"- api: {rec.get('api') or '-'}\n"
             f"- build: {rec.get('build') or '-'}\n"
             f"- gpu: {rec.get('gpu') or '-'} ({rec.get('sm') or '-'}), "
@@ -457,6 +499,6 @@ def issue_url(rec: dict, note: str = "") -> str:
             f"?labels=result&title={quote(title)}&body={quote(body)}")
 
 
-__all__ = ["record", "block", "parse", "fetch", "for_game", "advice",
+__all__ = ["record", "block", "parse", "said_verdict", "counts", "fetch", "for_game", "advice",
            "measured_note", "issue_url", "FEED_URL", "MIN_REPORTS",
            "MIN_MEASURED", "MARKER"]

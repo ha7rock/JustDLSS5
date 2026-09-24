@@ -34,6 +34,7 @@ class Inspection:
     hdr: bool = False
     vendor: str = ""
     bitness_override: int | None = None
+    gpu_sm: int | None = None
 
 
 class BackendService:
@@ -149,7 +150,7 @@ class BackendService:
                           mfg.applies(sm, game.api, game.install_dir, game.folder)[0],
                           driver, gpu.hdr_on() is True,
                           (gpu.other_vendor() or "") if not name else "",
-                          games.bitness_override(game.folder))
+                          games.bitness_override(game.folder), sm)
 
     def set_architecture(self, entry, bitness):
         if bitness is not None and (type(bitness) is not int or bitness not in (32, 64)):
@@ -175,9 +176,9 @@ class BackendService:
     def preview(self, entry, options):
         return "\n".join(installer.preview_lines(installer.preview(entry.game, options)))
 
-    def diagnose(self, entry):
+    def diagnose(self, entry, started=""):
         from .session import analyse
-        return analyse(entry)
+        return analyse(entry, started=started)
 
     def session_report(self, entry, target):
         from .session import analyse

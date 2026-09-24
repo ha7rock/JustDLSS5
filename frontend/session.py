@@ -18,6 +18,7 @@ class SessionResult:
     log_time: str = ""
     crash: object = None
     related_crash: bool = False
+    closing_crash: bool = False
     target: int = 0
     costs: list = field(default_factory=list)
     measurements: dict = field(default_factory=dict)
@@ -48,19 +49,47 @@ def current_crash(crash, folder):
     return not stamps or stamp >= max(stamps) - 300
 
 
-def analyse(entry, target=0):
+def closing_fault(crash, folder, route):
+    """Mirror upstream ctl_game.fault_while_closing without importing its Tk UI.
+
+    Requires a close-time fault and final OptiScaler teardown lines; an old
+    session's unload or capability-query parameter cleanup is insufficient.
+    """
+    if crash is None or route != dlss.OPTI:
+        return False
+    try:
+        path = diagnose._opti_log(folder) or folder / "OptiScaler.log"
+        stamp = datetime.strptime(crash.when[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+        if not -1 <= stamp - path.stat().st_mtime <= 30:
+            return False
+        with path.open("rb") as stream:
+            stream.seek(0, 2)
+            stream.seek(max(0, stream.tell() - 4096))
+            lines = [line for line in stream.read().decode("utf8", "replace").splitlines() if line.strip()]
+        last = lines[-4:]
+        return any(word in line for line in last for word in ("DLL_PROCESS_DETACH", "Unloading OptiScaler")) or (
+            any("TryDestroyNGXParameters" in line for line in last) and any("ReleaseFeature" in line for line in lines[-40:]))
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def analyse(entry, target=0, started=""):
     game, folder = entry.game, entry.game.install_dir
     report = diagnose.analyse(folder)
     manifest = diagnose._manifest(folder) or {}
     route = str(manifest.get("path") or "")
     crash = wincrash.last_crash(game.exe.name, since=diagnose._installed_at(folder) or 0) if game.exe else None
-    related = current_crash(crash, folder)
+    closing = closing_fault(crash, folder, route)
+    related = current_crash(crash, folder) and not closing
     if related and getattr(report, "never_ran", False) and ("/" in crash.module or "\\" in crash.module):
         try:
             module = Path(crash.module).resolve()
             related = PureWindowsPath(str(module)).is_relative_to(PureWindowsPath(str(folder.resolve())))
         except OSError:
             related = False
+    if started:
+        report = diagnose.answered(report, started,
+            diagnose._presence(folder, manifest, route, game_root=game.folder), str(manifest.get("kind") or "game"))
     verdict = report.verdict
     if related and verdict.startswith("Working"):
         verdict = "模型曾运行，但 Windows 记录了游戏崩溃。 / The model ran, but Windows recorded a game crash."
@@ -76,12 +105,12 @@ def analyse(entry, target=0):
     if crash:
         description = wincrash.describe(crash, str(manifest.get("proxy") or ""), tuple(manifest.get("files") or []))
         if description:
-            prefix = "" if related else "较早的崩溃记录 / Earlier crash record:\n"
+            prefix = "退出阶段异常（不计为运行中崩溃） / Fault during closing (not counted against session):\n" if closing else "" if related else "较早的崩溃记录 / Earlier crash record:\n"
             lines.append(prefix + "\n".join(description))
     result = SessionResult("", str(folder), route, verdict=verdict,
                            findings=findings, log_time=getattr(report, "log_time", ""),
-                           crash=crash, related_crash=related, target=target)
-    if report.ran and not related and work_applies(game, route):
+                           crash=crash, related_crash=related, closing_crash=closing, target=target)
+    if report.ran and not related and not started and work_applies(game, route):
         exact = autotune.ran_at_exact(folder, route)
         resolution = exact or 100
         feed = diagnose._last_run(diagnose._tail(folder / diagnose.FEED_LOG, 100_000))

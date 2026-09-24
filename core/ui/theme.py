@@ -90,7 +90,7 @@ def fit(text: str, font: tuple, room: int) -> str:
     return text.rstrip() + "\u2026"
 
 
-API_NAMES = {"DX9": "DirectX 9", "DX10": "DirectX 10", "DX11": "DirectX 11",
+API_NAMES = {"DX8": "DirectX 8", "DX9": "DirectX 9", "DX10": "DirectX 10", "DX11": "DirectX 11",
              "DX12": "DirectX 12", "OPENGL": "OpenGL", "VULKAN": "Vulkan"}
 
 

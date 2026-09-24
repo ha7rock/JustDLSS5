@@ -143,5 +143,77 @@ class WatcherTests(unittest.TestCase):
             self.assertTrue(window.watch_events.empty())
             window.close()
 
+
+class Upstream205Tests(unittest.TestCase):
+    def test_closing_fault_requires_recent_teardown_not_old_log(self):
+        import os
+        import tempfile
+        from pathlib import Path
+        from datetime import datetime, timezone
+        from frontend.session import closing_fault
+        with tempfile.TemporaryDirectory() as root:
+            folder = Path(root)
+            log = folder / 'OptiScaler.log'
+            log.write_text('ReleaseFeature\nTryDestroyNGXParameters\n')
+            stamp = 1780000000
+            os.utime(log, (stamp, stamp))
+            crash = NS(when=datetime.fromtimestamp(stamp + 1, timezone.utc).strftime('%Y-%m-%d %H:%M:%S'))
+            with patch('frontend.session.diagnose._opti_log', return_value=log):
+                self.assertTrue(closing_fault(crash, folder, dlss.OPTI))
+                self.assertFalse(closing_fault(crash, folder, dlss.FEEDER))
+                os.utime(log, (stamp - 60, stamp - 60))
+                self.assertFalse(closing_fault(crash, folder, dlss.OPTI))
+                log.write_text('QueryCapability\nTryDestroyNGXParameters\n')
+                os.utime(log, (stamp, stamp))
+                self.assertFalse(closing_fault(crash, folder, dlss.OPTI))
+
+    def test_wrong_package_and_wrong_mfg_variant_are_skipped(self):
+        from core import optiscaler
+        rows = [{'tag_name':'display-filter', 'assets':[{'name':'display-filter.zip', 'browser_download_url':'https://example.invalid/wrong.zip'}]},
+                {'tag_name':'v0.8.5','assets':[
+                    {'name':'OptiScaler-NR-v0.8.5-rtx40-mfg.zip','browser_download_url':'https://example.invalid/mfg.zip'},
+                    {'name':'OptiScaler-NR-v0.8.5.zip','browser_download_url':'https://example.invalid/standard.zip'}]}]
+        with patch.object(optiscaler.sources, 'cached_json', return_value=rows):
+            self.assertEqual(optiscaler.archive_name(optiscaler.PRESR), 'OptiScaler-DLSSNR-v0.8.5-standard.zip')
+            self.assertEqual(optiscaler.archive_name(optiscaler.PRESR_MFG), 'OptiScaler-DLSSNR-v0.8.5-mfg.zip')
+        self.assertTrue(optiscaler.card_refusal(optiscaler.PRESR_MFG, 120))
+        self.assertFalse(optiscaler.card_refusal(optiscaler.PRESR_MFG, 89))
+        self.assertFalse(optiscaler.card_refusal(optiscaler.PRESR, 120))
+
+    def test_component_notes_keep_distinct_causes(self):
+        from frontend.diagnostic_text import translate
+        missing = translate('the proxy this install wrote is not in the folder - install again')
+        beta = translate("this is a test build - 'newest release' no longer picks one; install again")
+        self.assertIn('代理 DLL', missing)
+        self.assertIn('测试版', beta)
+        self.assertNotEqual(missing, beta)
+
+    def test_user_failed_launch_overrides_unseen_verdict(self):
+        from core import diagnose, verdicts
+        report = diagnose.Report()
+        report.verdict = 'Loaded and set up - confirm in the overlay.'
+        corrected = diagnose.answered(report, 'never started', ['nvngx_dlss.dll: updated on the dlss page'])
+        self.assertEqual(verdicts.outcome(corrected.verdict), 'failed')
+        self.assertIn('undo what the dlss page changed first', corrected.findings[0].detail)
+        self.assertIsNone(verdicts.outcome('Unmapped custom outcome'))
+
+    def test_cancelled_user_answer_does_not_change_diagnosis(self):
+        from frontend.diagnostic_view import DiagnosticDialog
+        from frontend.session import SessionResult
+        app = QApplication.instance() or QApplication([])
+        dialog = DiagnosticDialog(SessionResult('original','fixture',dlss.FEEDER), 'Fixture', allow_answer=True)
+        with patch('frontend.diagnostic_view.QInputDialog.getItem', return_value=('游戏未能启动', False)):
+            dialog.ask_started()
+        self.assertIsNone(dialog.started_answer)
+        self.assertEqual(dialog.raw.toPlainText(), 'original')
+        dialog.reject()
+
+    def test_child_launch_restores_dll_search_when_creation_fails(self):
+        from core import child
+        with patch.object(child.sys, 'frozen', True, create=True), patch.object(child.sys, '_MEIPASS', 'fixture-runtime', create=True), patch.object(child, '_set_dll_directory', return_value=True) as directory, patch.object(child.subprocess, 'Popen', side_effect=OSError('failed')), patch('core.selfupdate.clean_env', return_value={}):
+            with self.assertRaises(OSError):
+                child.popen(['fixture.exe'])
+        self.assertEqual([call.args for call in directory.call_args_list], [(None,), ('fixture-runtime',)])
+
 if __name__ == '__main__':
     unittest.main()

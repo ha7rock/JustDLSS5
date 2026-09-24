@@ -148,9 +148,11 @@ class Shell:
     def back(self) -> None:
         if self.page is not None and self.page.back():
             return
+        hidden = self.rail_hidden()
         while self.history:
             name = self.history.pop()
-            if name in self.pages and (self.page is None or name != self.page.name):
+            if name in self.pages and name not in hidden \
+                    and (self.page is None or name != self.page.name):
                 self.show(name, remember=False)
                 return
         if self.page is None or self.page.name != "library":
@@ -310,64 +312,184 @@ class Shell:
     RAIL_ITEMS = (("library", "game", "games"), ("dlss", "chip", "dlss"),
                   ("video", "video", "video"), ("remix", "remix", "remix"),
                   ("vr", "headset", "vr"))
+    # The pages a person can take off the rail (#293). Games and dlss stay:
+    # one is home, the other is where every game's DLSS files are.
+    HIDEABLE = ("video", "remix", "vr")
+
+    def rail_hidden(self) -> set:
+        """The rail items switched off. settings.json is a file a person can
+        edit, so only names that can be hidden count."""
+        v = prefs.get("rail_hidden") or []
+        return {x for x in (v if isinstance(v, list) else []) if x in self.HIDEABLE}
+
+    def set_rail_hidden(self, name: str, hide: bool) -> None:
+        if name not in self.HIDEABLE:
+            return
+        now = self.rail_hidden()
+        now = (now | {name}) if hide else (now - {name})
+        prefs.set_("rail_hidden", [x for x in self.HIDEABLE if x in now])
+        if hide:
+            # Back must not land on a page the rail no longer shows, and the
+            # page on screen goes home with it.
+            self.history = [h for h in self.history if h != name]
+            if self.page is not None and self.page.name == name:
+                self.home()
+        self.draw_rail()
+
+    def _rail_item_menu(self, page: str) -> None:
+        self.kit.close_all()
+        self.rail_menu([(f"hide {page} from the sidebar",
+                         lambda: self.set_rail_hidden(page, True)),
+                        ("games > view > sidebar pages brings it back", lambda: None, False)],
+                       f"nav_{page}", T.px(440), max_rows=2)
+
+    # The rail's shapes, roomiest first; draw_rail takes the first one that
+    # fits the window's height. One fixed layout needed 580 px at 100%, so
+    # at 175% on a 1080p laptop, or in any window dragged shorter, the pages
+    # ran down into watch and help and a click on video landed on watch.
+    #   pages:  labels, logo, logo y, first y, step, hit above, hit below,
+    #           glyph size, glyph dy, label dy
+    #   bottom: watch and help (from the bottom), hit above, hit below watch,
+    #           hit below help, label dy, glyph dy
+    RAIL_SHAPES = (
+        ((True, True, 42, 122, 72, 28, 32, 17, -4, 20), (116, 52, 22, 34, 30, 22, 0)),
+        ((True, True, 30, 88, 56, 23, 27, 14, -9, 18), (92, 40, 18, 28, 26, 17, -3)),
+        ((False, True, 30, 80, 42, 19, 19, 15, 0, 0), (62, 24, 18, 18, 18, 0, 0)),
+        ((False, False, 0, 26, 42, 19, 19, 15, 0, 0), (62, 24, 18, 18, 18, 0, 0)),
+    )
+    RAIL_GAP = 6                     # between the last page and watch
+
+    @classmethod
+    def rail_shape(cls, h: int, n: int):
+        """(page shape, bottom shape, pages drawn) for a rail `h` px tall with
+        `n` pages. Past the last shape the pages that do not fit go behind a
+        "more" item, so nothing is ever drawn on top of anything else."""
+        for top, bottom in cls.RAIL_SHAPES:
+            last = top[3] + (n - 1) * top[4] + top[6]
+            if T.px(last + cls.RAIL_GAP) <= h - T.px(bottom[0] + bottom[2]):
+                return top, bottom, n
+        top, bottom = cls.RAIL_SHAPES[-1]
+        room = h - T.px(bottom[0] + bottom[2] + cls.RAIL_GAP + top[3] + top[6])
+        fits = max(1, room // max(1, T.px(top[4])) + 1)
+        return top, bottom, min(n, fits)
 
     def draw_rail(self) -> None:
         c = self.rail_c
         k = self.rail_kit
         c.delete("all")
+        self.content.delete("rail_hint")
         rw = T.px(84)
-        h = max(c.winfo_height(), T.px(400))
+        h = c.winfo_height()
+        if h <= 1:                   # not laid out yet; <Configure> draws it again
+            h = T.px(600)
         c.create_line(rw - 1, 0, rw - 1, h, fill=T.LINE)
-        try:
-            img = getattr(self, "_logo", None)
-            if img is None:
-                from . import imaging
-                buf = imaging.picture(win.ico_path(), T.px(36), T.px(36), bg=T.RAIL, cover=False)
-                if buf:
-                    img = self._logo = imaging.photo(tk, buf, T.px(36), T.px(36), c)
-            if img is not None:
-                c.create_image(rw / 2, T.px(42), image=img, tags="logo")
-                k.hover("logo")
-                k.on_click("logo", self._rail_nav("library"))
-        except Exception:
-            pass
-        active = self.page.rail if self.page is not None else 0
-        for i, (page, glyph, label) in enumerate(self.RAIL_ITEMS):
-            y = T.px(122) + i * T.px(72)
-            on = i == active
+        active = self.RAIL_ITEMS[self.page.rail if self.page is not None else 0][0]
+        hidden = self.rail_hidden()
+        shown = [it for it in self.RAIL_ITEMS if it[0] not in hidden]
+        top, bottom, fits = self.rail_shape(h, len(shown))
+        labels, logo, logo_y, first, step, up, down, gsize, gdy, ldy = top
+        more = []
+        if fits < len(shown):
+            shown, more = shown[:fits - 1], shown[fits - 1:]
+        if logo:
+            try:
+                img = getattr(self, "_logo", None)
+                if img is None:
+                    from . import imaging
+                    buf = imaging.picture(win.ico_path(), T.px(36), T.px(36), bg=T.RAIL, cover=False)
+                    if buf:
+                        img = self._logo = imaging.photo(tk, buf, T.px(36), T.px(36), c)
+                if img is not None:
+                    c.create_image(rw / 2, T.px(logo_y), image=img, tags="logo")
+                    k.hover("logo")
+                    k.on_click("logo", self._rail_nav("library"))
+            except Exception:
+                pass
+        items = [(p, g, lb, self._rail_nav(p)) for p, g, lb in shown]
+        if more:
+            items.append(("more", "more", "more", lambda more=more: self._rail_more(more)))
+        for i, (page, glyph, label, go) in enumerate(items):
+            y = T.px(first + i * step)
+            on = page == active or (page == "more" and active in [m[0] for m in more])
             tag = f"nav_{page}"
             col = T.TEXT if on else T.DIM
-            c.create_rectangle(T.px(4), y - T.px(28), rw - T.px(4), y + T.px(32), fill=T.RAIL,
+            c.create_rectangle(T.px(4), y - T.px(up), rw - T.px(4), y + T.px(down), fill=T.RAIL,
                                outline="", tags=tag)
             if on:
-                c.create_rectangle(0, y - T.px(26), T.px(3), y + T.px(30), fill=T.AMBER, outline="")
-            g = k.glyph(rw / 2, y - T.px(4), glyph, col, 17, tags=tag)
-            t = k.text(rw / 2, y + T.px(20), label, col, 8, anchor="center", tags=tag)
-            if not on:
-                k.hover(tag, lambda g=g, t=t: [c.itemconfigure(x, fill=T.MUTED) for x in (g, t)],
-                        lambda g=g, t=t: [c.itemconfigure(x, fill=T.DIM) for x in (g, t)])
-            else:
-                k.hover(tag)
-            k.on_click(tag, self._rail_nav(page))
+                c.create_rectangle(0, y - T.px(up - 2), T.px(3), y + T.px(down - 2),
+                                   fill=T.AMBER, outline="")
+            parts = [k.glyph(rw / 2, y + T.px(gdy), glyph, col, gsize, tags=tag)]
+            if labels:
+                parts.append(k.text(rw / 2, y + T.px(ldy), label, col, 8, anchor="center", tags=tag))
+            self._rail_hover(tag, parts, None if on else (T.MUTED, T.DIM), None if labels else label)
+            k.on_click(tag, go)
+            if page in self.HIDEABLE:
+                k._bind(tag, "<Button-3>", lambda _e, page=page: self._rail_item_menu(page),
+                        role="menu")
         # watcher and help at the bottom
+        w_off, h_off, bup, wdown, hdown, bldy, bgdy = bottom
         on, label = self.watching or (False, "watch off")
-        y = h - T.px(116)
-        c.create_rectangle(T.px(4), y - T.px(22), rw - T.px(4), y + T.px(34), fill=T.RAIL,
+        y = h - T.px(w_off)
+        c.create_rectangle(T.px(4), y - T.px(bup), rw - T.px(4), y + T.px(wdown), fill=T.RAIL,
                            outline="", tags="nav_watch")
         col = T.OK if on else T.DIM
-        k.glyph(rw / 2, y, "eye", col, 14, tags="nav_watch")
-        k.text(rw / 2, y + T.px(22), label, col, 7, anchor="center", tags="nav_watch")
-        k.hover("nav_watch")
+        parts = [k.glyph(rw / 2, y + T.px(bgdy), "eye", col, 14, tags="nav_watch")]
+        if labels:
+            parts.append(k.text(rw / 2, y + T.px(bldy), label, col, 7, anchor="center",
+                                tags="nav_watch"))
+        self._rail_hover("nav_watch", parts, None, None if labels else label)
         k.on_click("nav_watch", lambda: self.on_watch and self.on_watch())
-        y = h - T.px(52)
-        c.create_rectangle(T.px(4), y - T.px(22), rw - T.px(4), y + T.px(30), fill=T.RAIL,
+        y = h - T.px(h_off)
+        c.create_rectangle(T.px(4), y - T.px(bup), rw - T.px(4), y + T.px(hdown), fill=T.RAIL,
                            outline="", tags="nav_help")
-        hg = k.glyph(rw / 2, y, "help", T.DIM, 13, tags="nav_help")
-        ht = k.text(rw / 2, y + T.px(22), "help", T.DIM, 7, anchor="center", tags="nav_help")
-        k.hover("nav_help", lambda: [c.itemconfigure(x, fill=T.MUTED) for x in (hg, ht)],
-                lambda: [c.itemconfigure(x, fill=T.DIM) for x in (hg, ht)])
+        parts = [k.glyph(rw / 2, y + T.px(bgdy), "help", T.DIM, 13, tags="nav_help")]
+        if labels:
+            parts.append(k.text(rw / 2, y + T.px(bldy), "help", T.DIM, 7, anchor="center",
+                                tags="nav_help"))
+        self._rail_hover("nav_help", parts, (T.MUTED, T.DIM), None if labels else "help")
         k.on_click("nav_help", self.open_help)
         k.prune()
+
+    def _rail_hover(self, tag: str, parts: list, colours, hint) -> None:
+        """Brighten an item under the pointer and, when the rail is too short
+        for words, say its name beside it on the page."""
+        c = self.rail_c
+
+        def enter():
+            if colours:
+                for x in parts:
+                    c.itemconfigure(x, fill=colours[0])
+            if hint:
+                self._rail_hint(tag, hint)
+
+        def leave():
+            if colours:
+                for x in parts:
+                    c.itemconfigure(x, fill=colours[1])
+            self.content.delete("rail_hint")
+        self.rail_kit.hover(tag, enter, leave)
+
+    def _rail_hint(self, tag: str, text: str) -> None:
+        c, r = self.content, self.rail_c
+        c.delete("rail_hint")
+        box = r.bbox(tag)
+        if not box:
+            return
+        y = r.winfo_rooty() + (box[1] + box[3]) / 2 - c.winfo_rooty() + c.canvasy(0)
+        pad = T.px(8)
+        t = c.create_text(c.canvasx(0) + T.px(8) + pad, y, text=text, font=T.mono(9),
+                          fill=T.TEXT, anchor="w", tags="rail_hint")
+        x1, y1, x2, y2 = c.bbox(t)
+        b = c.create_rectangle(x1 - pad, y1 - T.px(4), x2 + pad, y2 + T.px(4), fill=T.SURF2,
+                               outline=T.LINE, tags="rail_hint")
+        c.tag_lower(b, t)
+        c.tag_raise("rail_hint")
+
+    def _rail_more(self, pages) -> None:
+        """The pages a very short rail had no room for, as a menu beside it."""
+        self.kit.close_all()
+        self.rail_menu([(label, self._rail_nav(p)) for p, _g, label in pages],
+                       "nav_more", T.px(260), max_rows=len(pages))
 
     def _rail_nav(self, page):
         def go():
@@ -775,11 +897,22 @@ class Dialog:
         f = T.mono(10)
         # measure the text to size the card
         probe = tk.Canvas(root)
-        tid = probe.create_text(0, 0, text=self.text, font=f, width=w - T.px(64), anchor="nw")
-        x1, y1, x2, y2 = probe.bbox(tid) or (0, 0, 0, 0)
+
+        def tall(width):
+            tid = probe.create_text(0, 0, text=self.text, font=f, width=width - T.px(64), anchor="nw")
+            x1, y1, x2, y2 = probe.bbox(tid) or (0, 0, 0, 0)
+            probe.delete(tid)
+            return T.px(74) + (y2 - y1) + T.px(90) + (T.px(52) if self.entry is not None else 0)
+        h = tall(w)
+        # #302: the card was cut to 85% of the WINDOW and a long text lost its
+        # end in a small one. The card is its own window: it grows wider first,
+        # and the screen is the limit, not the window under it.
+        sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+        if h > int(rh * 0.85):
+            w = max(w, min(T.px(860), int(sw * 0.9)))
+            h = tall(w)
         probe.destroy()
-        h = T.px(74) + (y2 - y1) + T.px(90) + (T.px(52) if self.entry is not None else 0)
-        h = min(h, int(rh * 0.85))
+        h = min(h, int(sh * 0.9))
         # a child of the dim, not of the main window: a Tk grab covers the
         # window it is set on and everything under it, so with the grab on the
         # dim a click on the dim is delivered (cancel) and the card's own
@@ -792,7 +925,8 @@ class Dialog:
             card.transient(root)
         except tk.TclError:
             pass
-        card.geometry(f"{w}x{h}+{rx + (rw - w) // 2}+{ry + (rh - h) // 2}")
+        cx, cy = self._pos(rx, ry, rw, rh, w, h)
+        card.geometry(f"{w}x{h}+{cx}+{cy}")
         c = tk.Canvas(card, width=w, height=h, bg=T.SURF2, highlightthickness=0)
         c.pack(fill="both", expand=True)
         k = Kit(c)
@@ -899,9 +1033,22 @@ class Dialog:
                 return                        # the window is away; leave it where it is
             self.scrim.geometry(f"{rw}x{rh}+{rx}+{ry}")
             cw, ch = self.card.winfo_width(), self.card.winfo_height()
-            self.card.geometry(f"+{rx + (rw - cw) // 2}+{ry + (rh - ch) // 2}")
+            cx, cy = self._pos(rx, ry, rw, rh, cw, ch)
+            self.card.geometry(f"+{cx}+{cy}")
         except tk.TclError:
             pass
+
+    def _pos(self, rx, ry, rw, rh, w, h):
+        """The card centred on the window and kept on the desktop - the whole
+        of it, the window may be on a second monitor left of or above the
+        first. One place: the first placement clamped a card taller than its
+        window (#302) and the next <Configure> centred it back off the top."""
+        r = self.root
+        vx, vy = r.winfo_vrootx(), r.winfo_vrooty()
+        vw = max(r.winfo_screenwidth(), r.winfo_vrootwidth())
+        vh = max(r.winfo_screenheight(), r.winfo_vrootheight())
+        return (max(vx, min(rx + (rw - w) // 2, vx + vw - w)),
+                max(vy, min(ry + (rh - h) // 2, vy + vh - h)))
 
     def _finish(self, value):
         if self.done.get():

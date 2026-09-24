@@ -31,12 +31,11 @@ as the window runs it, and the watching is `watch`, which only reads.
 from __future__ import annotations
 
 import os
-import subprocess
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from . import anticheat, community, installer, log, pe, watch
+from . import anticheat, child, community, installer, log, pe, watch, wincrash
 
 # Three, and the first one is the route the tool recommended. A fourth try
 # has never rescued a game in the corpus, and every attempt costs a download,
@@ -131,6 +130,19 @@ def plan_reasons(offer: list[str], data: dict | None, game=None) -> list[tuple[s
     return [(n, said.get(n, "")) for n in offer]
 
 
+def _through_user_layer(game) -> bool:
+    """Does the install in this game's folder reach it as a Vulkan layer?
+
+    Read from the install record, never guessed: a folder with no record
+    answers False, and so does anything that cannot be read.
+    """
+    try:
+        man = installer._previous_manifest(Path(game.install_dir)) or {}
+        return man.get("proxy") == installer.VULKAN_LAYER
+    except Exception:
+        return False
+
+
 def may_start(game, check_running: bool = False) -> tuple[bool, str]:
     """Whether this tool may start the game itself, and why not when it may not.
 
@@ -201,6 +213,18 @@ def may_start(game, check_running: bool = False) -> tuple[bool, str]:
                            f"starting it would start the wrong thing")
     except Exception:
         pass
+    # A program this tool starts inherits its token. Run as administrator,
+    # that makes the game elevated too, and an elevated process does not get
+    # the Vulkan layers registered per user - which is where ReShade's is.
+    # On a route that reaches the game through that layer the start itself
+    # would decide the answer: DXVK runs, ReShade never does, and autopilot
+    # records the route as failed (#400, #348).
+    if _through_user_layer(game) and wincrash.elevated():
+        return False, ("this tool is running as administrator, and a game it "
+                       "starts would be too - Windows gives an elevated game "
+                       "none of the per-user Vulkan layers ReShade needs on "
+                       "this route, so start it yourself the way you always "
+                       "do")
     src = str(getattr(game, "source", "") or "")
     if src and src.lower() not in ("manual", "emulator"):
         return True, (f"{src} game: it starts from the executable here, but "
@@ -216,7 +240,7 @@ def start(game) -> tuple[bool, str]:
         return False, why
     exe = Path(game.exe)
     try:
-        subprocess.Popen([str(exe)], cwd=str(exe.parent),
+        child.popen([str(exe)], cwd=str(exe.parent),
                          close_fds=True)
         return True, why
     except Exception as e:                      # a store stub, a permission

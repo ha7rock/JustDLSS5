@@ -20,6 +20,7 @@ from . import model
 from .model import *  # noqa: F401,F403
 from .evidence import *  # noqa: F401,F403
 from .process import *  # noqa: F401,F403
+from .process import _route_owns
 from .helper import *  # noqa: F401,F403
 from .routes import *  # noqa: F401,F403
 from .body import *  # noqa: F401,F403
@@ -162,18 +163,51 @@ def _explain_no_log(install_dir: Path, man: dict, rep: Report,
             rep.verdict = ("The 32-bit Vulkan layer was being discarded as a "
                            "duplicate name - install again to rewrite it.")
             return rep
+        # How Windows starts the exe decides whether the layer can load at
+        # all: an elevated process does not get the Vulkan layers registered
+        # per user, and ours is one. Three reports (#238, #348, #400) had a
+        # registered layer, DXVK's log and no ReShade.log, and were told to
+        # install again - which rewrites a registration that was never the
+        # problem. Said as THE cause only from the exe's own compatibility
+        # setting. This tool running elevated is its state now, not how the
+        # game was started (gate 2.0.5): it is one possibility in the text
+        # below, and 2.0.5's play/autopilot refuse a layer start from it.
+        from .. import wincrash as _wc
+        exe_name = str(man.get("exe") or "")
+        flags = _wc.start_flags(install_dir / exe_name) if exe_name else ""
+        if _wc.runs_as_admin(flags):
+            rep.add(BAD, f"{exe_name} is set to run as administrator "
+                         f"({flags}).",
+                    f"{dxvk_logs[0]} proves the {app} started and DXVK "
+                    f"loaded, and there is no ReShade.log. Windows starts "
+                    f"this exe elevated every time, and an elevated process "
+                    f"does not get the Vulkan layers registered per user - "
+                    f"which is where ReShade's layer is. Right-click "
+                    f"{exe_name} -> Properties -> Compatibility, untick 'Run "
+                    f"this program as an administrator' (also under 'Change "
+                    f"settings for all users'), then start the {app} again.")
+            rep.verdict = (f"{exe_name} runs as administrator, so ReShade's "
+                           f"Vulkan layer is skipped - untick 'Run as "
+                           f"administrator' on the exe.")
+            return rep
+        _self_elevated = _wc.elevated()
         rep.add(BAD, "DXVK ran, and ReShade did not.",
                 f"{dxvk_logs[0]} was written since the install, so the {app} "
                 f"was started and DXVK loaded and translated it to Vulkan - "
                 f"but ReShade writes ReShade.log the moment it loads, and "
-                f"there is none, so ReShade is not in the chain. The "
-                f"likeliest reason is its {bits}-bit Vulkan layer, whose "
-                f"registration is per user and per architecture: install "
-                f"again to write it, and if the game still starts without a "
-                f"ReShade.log, say so - a {bits}-bit layer that registers "
-                f"and does not load is worth knowing about.")
-        rep.verdict = (f"DXVK ran and ReShade did not - install again to "
-                       f"rewrite the {bits}-bit Vulkan layer.")
+                f"there is none, so ReShade is not in the chain. One "
+                f"possible cause: the {app} was started elevated - by a launcher, "
+                f"a shortcut or a program running as administrator"
+                + (", and this tool is running as administrator right now"
+                   if _self_elevated else "")
+                + f". An elevated process does not get the Vulkan layers "
+                f"registered per user, which is where ReShade's is. Start "
+                f"the {app} the way you normally do, not as administrator. "
+                f"If there is still no ReShade.log, say so in an issue with "
+                f"this report - a {bits}-bit layer that registers and does "
+                f"not load is worth knowing about.")
+        rep.verdict = (f"DXVK ran and ReShade did not - if anything starts "
+                       f"the {app} as administrator, start it normally.")
         return rep
 
     # Did the game itself run? Its own files answer that, and the answer
@@ -304,6 +338,75 @@ def _explain_no_log(install_dir: Path, man: dict, rep: Report,
     # written, and the answer told the person to run the game once).
     rep.never_ran = True
     return rep
+
+
+def _foreign_reshade(install_dir: Path, since: float, rep: Report,
+                     foreign: list) -> None:
+    """Name the DLSS hooks a ReShade loaded on a route that installs none.
+
+    OptiScaler and Remix both return before the add-on read the ReShade
+    routes go through, so a ReShade in those folders was never looked at.
+    """
+    who, what = {"remix": ("the Remix runtime", "the Remix runtime's neural "
+                                                "pass")}.get(
+        rep.route, ("OptiScaler", "OptiScaler's neural rendering"))
+    reshade = install_dir / RESHADE_LOG
+    if not reshade.is_file() or (since and not _fresh(reshade, since)):
+        return
+    rtext = _last_session(_tail(reshade, 250_000))
+    loaded = list(dict.fromkeys(
+        re.findall(r'Registered add-on "([^"]+)" v\S+', rtext)))
+    hooks = _foreign_hooks(loaded, rep.route)
+    if not hooks:
+        return
+    # "DLSS 5 Neural Rendering" is renodx-dlss5, which this tool installs on
+    # its own ReShade routes - and which other tools ship too (#420 had it
+    # beside the Swapper's overlay). The name alone does not say whose copy
+    # it is, so it is named for what it is; only the install record's
+    # "replaced a previous" note says it was this tool's (gate 2.0.5).
+    ours = [n for n in hooks if any(_route_owns(n, r) for r in (
+        "feeder", "bridge", "native", "renodx", "upstream", "standalone"))]
+    theirs = [n for n in hooks if n not in ours]
+    foreign[:] = theirs
+    if theirs:
+        rep.add(BAD, f"Another DLSS tool's add-on was loaded beside "
+                     f"{who}: " + ", ".join(theirs),
+                "A ReShade is in this game too - its ReShade.log is beside "
+                "the executable, written since this install, and this route "
+                "installs none - and it loaded these, which work on the same "
+                f"frame and the same NGX calls as {what}. Two at once end in "
+                "nothing happening, flicker or a crash. Uninstall the tool "
+                "that put them there (or move that ReShade out of the folder) "
+                f"and test with {who} alone.")
+    if ours:
+        notes = [n for n in (_manifest(install_dir).get("notes") or [])
+                 if isinstance(n, str) and n.startswith("replaced a previous")]
+        # renodx-dlss5 by its own name; the feeder's, bridge's and the other
+        # add-ons of ours are not renodx (gate 2.0.5, pass 2).
+        _renodx = all(n.strip().lower() == NATIVE_ADDON_NAME.lower() for n in ours)
+        _called = "renodx-dlss5" if _renodx else "an add-on of this tool's"
+        rep.add(BAD, f"A ReShade with {_called} is still loading in this "
+                     "game: " + ", ".join(ours),
+                (f"renodx-dlss5 is the add-on this tool's ReShade routes "
+                 f"install, and other DLSS 5 tools ship it too" if _renodx else
+                 f"{', '.join(ours)} is what this tool's ReShade routes "
+                 f"install")
+                + (f" - this folder had one of this tool's earlier installs "
+                   f"({notes[-1]})" if notes else
+                   (" - loaded beside " + ", ".join(theirs) + ", it most "
+                    "likely came with that" if theirs else ""))
+                + f". A ReShade is still beside the executable and loaded it "
+                  f"after this {rep.route} install, and it hooks the same NGX "
+                  f"calls as {what}. Press uninstall, take out that ReShade "
+                  f"(a dxgi.dll, d3d9.dll or d3d12.dll with ReShade.ini next "
+                  f"to it, and its .addon64 files), then install "
+                  f"{rep.route} again.")
+        if rep.verdict.startswith("Working"):
+            rep.findings[-1].level = WARN
+        elif rep.verdict:
+            rep.verdict = (f"{rep.verdict.rstrip()} A ReShade with "
+                           f"{_called} is loading as well - take that "
+                           f"ReShade out, then install again.")
 
 
 def analyse(install_dir: Path, last_error: str = "") -> Report:
@@ -437,9 +540,21 @@ def _analyse(install_dir: Path, last_error: str, foreign: list) -> Report:
     _stale_install(rep, man)
 
     if rep.route == "optiscaler":
-        return _analyse_optiscaler(install_dir, rep, since, man)
+        rep = _analyse_optiscaler(install_dir, rep, since, man)
+        # This route installs no ReShade, so a ReShade.log beside the game
+        # since the install is somebody else's ReShade - and every DLSS
+        # add-on it loaded works on the same frame and the same NGX calls
+        # as OptiScaler's neural rendering. The route returned before the
+        # add-on read below, so #420's "DLSS 5 Swapper Overlay" and a second
+        # "DLSS 5 Neural Rendering" hook were never named.
+        _foreign_reshade(install_dir, since, rep, foreign)
+        return rep
     if rep.route == "remix":
-        return _analyse_remix(install_dir, rep, since, man)
+        # The same blind spot, on the other route that installs no ReShade
+        # (and needs every ReShade gone: the install clears them).
+        rep = _analyse_remix(install_dir, rep, since, man)
+        _foreign_reshade(install_dir, since, rep, foreign)
+        return rep
 
     feed = install_dir / FEED_LOG
     host = install_dir / HOST_LOG

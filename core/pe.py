@@ -223,6 +223,7 @@ API_PROXY = {
     "OpenGL": "opengl32.dll",
     "Vulkan": None,   # needs a system-wide layer registration
     "DX9": None,      # needs DXVK first
+    "DX8": None,      # needs DXVK first (its d3d8.dll runs on its d3d9.dll)
 }
 
 
@@ -338,6 +339,25 @@ def _ships_dlss(folder: Path, bits: int | None = None) -> str:
 
 
 def detect_api(path: Path) -> tuple[str, str]:
+    """Return (api_label, reason) - see _detect_api.
+
+    Direct3D 8 exists only as a 32-bit runtime: Windows ships no 64-bit
+    d3d8.dll, so a 64-bit exe that names it does not draw with it, and
+    reading it as DX8 sent a 64-bit game down the 32-bit DXVK path
+    (gate 2.0.5)."""
+    api, why = _detect_api(path)
+    if api == "DX8":
+        try:
+            bits = exe_bitness(path)
+        except PEError:
+            bits = None
+        if bits == 64:
+            return ("Unknown", f"{why} - but Direct3D 8 is 32-bit only, and "
+                               f"this exe is 64-bit")
+    return api, why
+
+
+def _detect_api(path: Path) -> tuple[str, str]:
     """Return (api_label, reason).
 
     Order matters. Many Unreal games run on DX12 yet statically link
@@ -446,6 +466,10 @@ def detect_api(path: Path) -> tuple[str, str]:
                 return (name, f"imports d3d9.dll, but {where} - the renderer "
                               f"is {label[name]}, not DirectX 9")
         return "DX9", "imports d3d9.dll, no DXGI"
+    if has("d3d8.dll"):
+        # Direct3D 8 is 32-bit only and older than every other API here, so
+        # an executable that imports it and nothing newer draws with it.
+        return "DX8", "imports d3d8.dll, no DXGI"
     if _has_d3d12_agility_sdk(path.parent, bits):
         return ("DX12", "no graphics DLL imported statically, but ships a "
                         "D3D12 Agility SDK or DLSS Frame Generation/Ray "
@@ -466,11 +490,14 @@ def detect_api(path: Path) -> tuple[str, str]:
 
 
 # Same priority as the static table above: DXGI evidence beats everything, a
-# lone d3d9.dll is DirectX 9.
+# lone d3d9.dll is DirectX 9, and d3d8.dll counts only when nothing newer is
+# named anywhere. It used to be missing here, so the one record an Unreal
+# Engine 2 game carries - System\D3DDrv.dll imports d3d8.dll - was thrown
+# away and POSTAL 2 was sent a dxgi.dll it never loads (#403).
 _RUNTIME_API = {
     "d3d12.dll": "DX12", "d3d11.dll": "DX11", "d3d10.dll": "DX10",
     "dxgi.dll": "DX12", "vulkan-1.dll": "Vulkan", "opengl32.dll": "OpenGL",
-    "d3d9.dll": "DX9",
+    "d3d9.dll": "DX9", "d3d8.dll": "DX8",
 }
 _RUNTIME_SCAN_MAX = 512 * 1024 * 1024
 # Files our own routes (or ReShade, DXVK, OptiScaler) drop beside a game;
@@ -589,6 +616,100 @@ def _is_unreal(exe: Path) -> bool:
         return False
 
 
+# Unreal Engine 1 and 2 (Deus Ex, UT2004, POSTAL 2, Splinter Cell: Chaos
+# Theory, SWAT 4, Killing Floor...) keep the executable in System\ beside
+# Core.dll and Engine.dll, import no graphics DLL, and load the renderer the
+# ini names: [Engine.Engine] RenderDevice=D3D9Drv.D3D9RenderDevice (Unreal 1
+# spells it GameRenderDevice). The module's own import table says which
+# Direct3D it is - D3DDrv.dll is Direct3D 8 in Unreal 2 and Direct3D 7
+# (ddraw.dll) in Unreal 1, so the name alone does not settle it. POSTAL 2 got
+# "Unknown" and a dxgi.dll it never loads (#403).
+_CLASSIC_DEVICES = {
+    "d3d9drv": "DX9", "d3d10drv": "DX10", "d3d11drv": "DX11",
+    "opengldrv": "OpenGL", "xopengldrv": "OpenGL", "vulkandrv": "Vulkan",
+}
+_CLASSIC_INI_MAX = 4 * 1024 * 1024
+
+
+def _classic_ini_device(folder: Path, stem: str) -> tuple[str, str]:
+    """(render device module stem, "Key in ini") from the game's ini, or ("", "").
+
+    The game rewrites this file on every run and players edit it by hand, so
+    it is read as untrusted text: any encoding, a BOM or none, spaces around
+    the '=', a quoted value, a comment after it.
+    """
+    for name in (f"{stem}.ini", "Default.ini"):
+        p = folder / name
+        try:
+            if not p.is_file() or p.stat().st_size > _CLASSIC_INI_MAX:
+                continue
+            raw = p.read_bytes()
+        except OSError:
+            continue
+        if raw[:2] in (b"\xff\xfe", b"\xfe\xff") or b"\x00" in raw[:256]:
+            text = raw.decode("utf-16", "ignore")
+        else:
+            text = raw.decode("utf-8-sig", "ignore") if raw[:3] == b"\xef\xbb\xbf" \
+                else raw.decode("latin-1")
+        section, keys = "", {}
+        for line in text.splitlines():
+            s = line.strip()
+            if s.startswith("[") and "]" in s:
+                section = s[1:s.index("]")].strip().lower()
+                continue
+            if section != "engine.engine" or "=" not in s or s.startswith(";"):
+                continue
+            k, v = s.split("=", 1)
+            v = v.split(";", 1)[0].strip().strip('"').strip()
+            keys.setdefault(k.strip().lower(), v)
+        for key in ("GameRenderDevice", "RenderDevice"):
+            dev = keys.get(key.lower(), "").split(".", 1)[0].strip()
+            if dev:
+                return dev, f"{key} in {name}"
+    return "", ""
+
+
+def _classic_device_api(folder: Path, dev: str, names: dict[str, Path]) -> tuple[str, str]:
+    """(api label, how it was read) for one render device module, or ("", "").
+
+    "DX7" is returned for a ddraw.dll renderer; nothing here reaches it.
+    """
+    dll = names.get(dev.lower() + ".dll")
+    if dll is not None and dll.is_file():
+        imps = {i.rsplit("/", 1)[-1] for i in pe_imports(dll)}
+        for n, api in _RUNTIME_API.items():
+            if n in imps:
+                return api, f"{dll.name} imports {n}"
+        if "ddraw.dll" in imps:
+            return "DX7", f"{dll.name} imports ddraw.dll"
+    api = _CLASSIC_DEVICES.get(dev.lower(), "")
+    return (api, f"{dev} is the {api} renderer") if api else ("", "")
+
+
+def _unreal_classic(exe: Path, names: dict[str, Path]) -> tuple[str, str] | None:
+    """(api, reason) for an Unreal Engine 1/2 game, or None."""
+    folder = exe.parent
+    if folder.name.lower() != "system" \
+            or "core.dll" not in names or "engine.dll" not in names:
+        return None
+    dev, ini = _classic_ini_device(folder, exe.stem)
+    tried = [(dev, f"{dev} as the {ini}")] if dev else []
+    # No ini, or one naming a module that is not there: the modules present.
+    tried += [(d, f"{d}.dll beside the exe, no ini naming a renderer")
+              for d in ("D3D9Drv", "D3DDrv") if d.lower() + ".dll" in names]
+    for dev, where in tried:
+        api, how = _classic_device_api(folder, dev, names)
+        if api == "DX7":
+            return ("Unknown", f"an Unreal Engine 1 game on its Direct3D 7 "
+                               f"renderer ({where}; {how}) - nothing here "
+                               f"reaches Direct3D 7. Switch the game to its "
+                               f"OpenGL or Direct3D 9 renderer, if it has one, "
+                               f"and scan again")
+        if api:
+            return (api, f"an Unreal Engine 1/2 game ({where}; {how})")
+    return None
+
+
 def _engine_default(exe: Path, names: dict[str, Path] | None = None) -> tuple[str, str] | None:
     """(api, reason) when an engine module beside the exe settles it."""
     if names is None:
@@ -600,6 +721,9 @@ def _engine_default(exe: Path, names: dict[str, Path] | None = None) -> tuple[st
     for n, hit in _ENGINE_DEFAULT.items():
         if n in names and names[n].is_file():
             return hit
+    classic = _unreal_classic(exe, names)
+    if classic:
+        return classic
     if _is_unreal(exe):
         return ("DX12", "an Unreal Engine game (Binaries/Win64 beside the "
                         "engine's own folder) - Direct3D 12 or 11, and "
