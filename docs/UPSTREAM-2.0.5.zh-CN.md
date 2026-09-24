@@ -29,4 +29,20 @@
 
 本次未安装、卸载、启动真实游戏或写入全局图形层；无新增显卡组合、DX8 或 VR 的实机兼容性声明。
 
-状态：接入与本地回归完成，待 Windows 构建、CI 和发行校验后追加最终结果。
+状态：接入、验证与玩家测试版发布已完成。
+
+
+## 执行结果（2026-09-24 自动触发）
+
+- 132 项后端属性/调用检查、122 项离线回归及 INI 检查通过；76 个核心/CLI 文件与固定上游一致。
+- 本地 Windows 打包和程序启动通过。
+- 独立 Windows CI 完成回归、构建、启动、许可和对应源码准备：https://github.com/ha7rock/JustDLSS5/actions/runs/35982980054
+- 构建提交、工作流 ID、包内许可和发行摘要校验通过：https://github.com/ha7rock/JustDLSS5/actions/runs/35983292989
+- PR #8 已合并，合并后文件树与候选一致：https://github.com/ha7rock/JustDLSS5/pull/8
+- 构建与发行标签提交：cca9257417466ddb79092e1704c3a31bcd8e7cfa。
+- v0.2.15 已于 2026-09-24T09:47:44Z 发布，非草稿、prerelease，程序、源码、摘要和构建信息四份附件齐全：https://github.com/ha7rock/JustDLSS5/releases/tag/v0.2.15
+- Windows ZIP SHA-256：6416739dcb16c0853c9c32ba55f2af4c701439c0631457610195e565f749da58
+- 源码 ZIP SHA-256：cff6d89f4ae288f35447a34edd8c4dcf8b19c0eb8ad3e75a44c0c718ac194ad8
+- 中英文 README 版本与下载入口、启动器同步至 v0.2.15。未覆盖原开发目录，未合并独立游戏库设计 PR。
+
+本次维护执行已结束，无待完成的发行步骤。保留日程，不把维护任务混入后续普通对话。
