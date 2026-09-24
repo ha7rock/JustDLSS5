@@ -487,6 +487,9 @@ class MainWindow(QMainWindow):
         dialog.show()
         self.detail_stack.setCurrentIndex(2)
         self.library_navigation.setCurrentIndex(1)
+        self.pages.setCurrentIndex(0)
+        for index, btn in enumerate(self.nav_buttons):
+            btn.setChecked(index == 0)
 
     def play_selected(self):
         if not self.current or self.busy_job:
@@ -1476,7 +1479,7 @@ class MainWindow(QMainWindow):
                     self.game_reports[item.key] = result
                     if self.current and self.current.key == item.key:
                         self.game_session_status.setText(self.t("游戏已退出，运行检查已完成。", "Game closed. Session check complete."))
-                        if self.library_navigation.currentIndex() == 1:
+                        if self.pages.currentIndex() == 0 and self.library_navigation.currentIndex() == 1:
                             self._show_diagnostic(item, result)
                     self.watch_report_button.setEnabled(True)
                     self.status.setText(self.t(f"{name} 已退出；运行检查已完成。", f"{name} closed. Session check complete."))
@@ -1486,16 +1489,18 @@ class MainWindow(QMainWindow):
                 break
 
     def show_watch_report(self):
-        if self.watch_result:
-            name, result = self.watch_result
-            entry = next((item for item in self.model.entries if item.game.name == name), None)
-            if entry:
-                for row in range(self.proxy.rowCount()):
-                    index = self.proxy.index(row, 0)
-                    if index.data(Qt.ItemDataRole.UserRole).key == entry.key:
-                        self._open_game(index)
-                        break
-                self._show_diagnostic(entry, result)
+        if not self.watch_result or self._game_tool_busy():
+            return
+        name, result = self.watch_result
+        entry = next((item for item in self.model.entries if item.game.name == name), None)
+        if entry:
+            self._clear_library_filters()
+            for row in range(self.proxy.rowCount()):
+                index = self.proxy.index(row, 0)
+                if index.data(Qt.ItemDataRole.UserRole).key == entry.key:
+                    self._open_game(index)
+                    break
+            self._show_diagnostic(entry, result)
 
     def manage_runtimes(self):
         if self.current and not self.busy_job and not self._game_tool_busy():

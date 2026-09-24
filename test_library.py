@@ -198,6 +198,19 @@ class LibraryTests(unittest.TestCase):
         self.assertIsNotNone(w.inline_dialog)
         self.assertIsNone(QApplication.activeModalWidget())
 
+    def test_last_report_opens_from_settings_with_a_filtered_library(self):
+        from frontend.session import SessionResult
+        w = self.window
+        result = SessionResult("fixture", "fixture", "opti", verdict="Working.")
+        w.watch_result = (self.entries[1].game.name, result)
+        w.search.setText("Control")
+        w.navigate(3)
+        w.show_watch_report()
+        self.drain()
+        self.assertEqual(w.pages.currentIndex(), 0)
+        self.assertEqual(w.current.key, self.entries[1].key)
+        self.assertEqual(w.detail_stack.currentIndex(), 2)
+
     def test_combined_filters_and_reset(self):
         w = self.window
         w.installed_filter.setCurrentIndex(2)
