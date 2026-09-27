@@ -461,13 +461,17 @@ class GamePage(Page):
         colour = T.OK if ok else (T.WARN if kind in ("diagnosis", "autopilot", "failed") else T.MUTED)
         if ok and warnings:
             colour = T.AMBER          # installed, with something to read first
-        lines_y = y + T.px(34)
         title = r.get("title", "")
         if ok and warnings:
             title = f"{title} - {len(warnings)} warning{'s' if len(warnings) != 1 else ''}"
-        c.create_text(pad + T.px(20), y + T.px(24), text=T.fit(title, T.mono(12, True), w - T.px(40)),
-                      font=T.mono(12, True), fill=colour, anchor="w", tags=tags + ("result",))
-        y = lines_y + T.px(8)
+        # The title is the verdict, and a verdict is a sentence with its
+        # instruction at the end ("... - move it out of the game folder"):
+        # cut to one line, the part to act on was the part that went missing.
+        head = c.create_text(pad + T.px(20), y + T.px(14), text=" ".join(str(title).split()),
+                             font=T.mono(12, True), fill=colour, anchor="nw", width=w - T.px(40),
+                             tags=tags + ("result",))
+        box = c.bbox(head)
+        y = max(y + T.px(42), (box[3] if box else y) + T.px(8))
         # the install's warnings (the swap ban, a taken proxy name, 'not
         # supported') went only to the log drawer, which is closed
         for text in warnings[:4]:
@@ -494,9 +498,9 @@ class GamePage(Page):
                 x += T.px(22) + T.width(t["route"], T.mono(10, True)) + T.px(34)
             y += T.px(30)
         elif kind == "failed":
-            c.create_text(pad + T.px(20), y, text=T.fit(r.get("detail", ""), T.mono(9), w - T.px(40)),
-                          font=T.mono(9), fill=T.MUTED, anchor="w", tags=tags)
-            y += T.px(26)
+            # a refusal says what to pick instead in its last words
+            # ("... Choose wilsjo2's fork"), which one line cut off
+            y = self._wrapped(r.get("detail", ""), pad + T.px(20), y, w - T.px(40), T.MUTED)
         if kind in ("installed", "autopilot") and a.steps:
             steps = [s for s in a.steps if s[0] == "step"]
             shown = steps if self.steps_open else steps[:3]
@@ -505,16 +509,12 @@ class GamePage(Page):
             y += T.px(28)
             for i, (_k, text) in enumerate(shown, 1):
                 c.create_text(pad + T.px(20), y, text=f"{i}", font=T.mono(9, True), fill=accent, anchor="w", tags=tags)
-                c.create_text(pad + T.px(44), y, text=T.fit(text, T.mono(9), w - T.px(64)), font=T.mono(9),
-                              fill=T.TEXT, anchor="w", tags=tags)
-                y += T.px(24)
+                y = self._wrapped(text, pad + T.px(44), y, w - T.px(64), T.TEXT) - T.px(4)
             warns = [s for s in a.steps if s[0] == "warn"]
             if self.steps_open:
                 for _k, text in warns:
                     k.glyph(pad + T.px(20), y, "warn", T.AMBER, 10, anchor="w", tags=tags)
-                    c.create_text(pad + T.px(44), y, text=T.fit(text, T.mono(9), w - T.px(64)), font=T.mono(9),
-                                  fill=T.MUTED, anchor="w", tags=tags)
-                    y += T.px(24)
+                    y = self._wrapped(text, pad + T.px(44), y, w - T.px(64), T.MUTED) - T.px(4)
             if len(steps) > 3 or warns:
                 k.link(pad + T.px(20), y + T.px(4), "fewer" if self.steps_open else "all steps and warnings",
                        self._toggle_steps, glyph="up" if self.steps_open else "down", colour=T.DIM, tags=tags)
@@ -564,10 +564,19 @@ class GamePage(Page):
         k.button(pad + T.px(20), y + T.px(12), bw, label, lambda: a.try_next(g, route), glyph="pilot", h=T.px(38),
                  tags=tags, size=10, accent=accent, kind="primary",
                  tip="installs that route and checks it loads, the way autopilot does")
+        bottom = y + T.px(62)
         if why:
-            c.create_text(pad + bw + T.px(40), y + T.px(31), text=T.fit(why, T.mono(9), w - bw - T.px(60)),
-                          font=T.mono(9), fill=T.MUTED, anchor="w", tags=tags)
-        y += T.px(62)
+            # beside the button while it fits one row, under it when it does
+            # not: the reason is what says why this route and not another
+            room = w - bw - T.px(60)
+            one = T.width(" ".join(why.split()), T.mono(9)) <= room
+            item = c.create_text(pad + bw + T.px(40), y + T.px(31) if one else y + T.px(12),
+                                 text=" ".join(why.split()), font=T.mono(9), fill=T.MUTED,
+                                 anchor="w" if one else "nw", width=room, tags=tags)
+            box = c.bbox(item)
+            if box:
+                bottom = max(bottom, box[3] + T.px(14))
+        y = bottom
         box = c.create_rectangle(pad, top, pad + w, y, fill=mix(T.BG, T.SURF, 0.9), outline=T.LINE, tags=tags)
         c.create_rectangle(pad, top, pad + T.px(3), y, fill=T.AMBER, outline="", tags=tags)
         c.tag_lower(box)

@@ -36,6 +36,9 @@ from . import net
 FEED_URL = ("https://raw.githubusercontent.com/Kizzuwatnaa/DLSS5-Autopilot/"
             "main/docs/compatibility.json")
 CACHE_NAME = "compatibility.json"
+# The same results as a page people can search, one row per card, driver and
+# build (#304). The compatibility workflow builds it and GitHub Pages serves it.
+PAGE_URL = "https://kizzuwatnaa.github.io/DLSS5-Autopilot/"
 FRESH_SECONDS = 6 * 3600
 # Below this many reports a line about "what worked for others" is noise
 # dressed as knowledge - two people are not a finding.
@@ -46,12 +49,34 @@ MIN_REPORTS = 5
 # setting for the game.
 MIN_MEASURED = 3
 MARKER = "autopilot-report"
+# A class of games is one graphics api plus what the game ships to upscale
+# with: its own DLSS, FSR 2/3, XeSS, or nothing. It is what the tool knows
+# about a game before anybody has reported it, so it is the only honest
+# "games like this". The api alone is not: 53 of 69 OptiScaler results on
+# DX12 were games with their own DLSS, and 9 of 27 feeder results on DX12
+# were games without - put side by side they compare two kinds of game,
+# not two routes. Results carry the class from 2.0.6 on ("up" in the record).
+UPSCALER_CLASSES = ("dlss", "fsr", "xess", "none")
+# The class moves the recommended route only when both routes have this many
+# results in it AND the ranges they allow do not overlap (see class_pick).
+# Below it the counts are shown, never acted on - a route that worked for
+# eleven people is a lead.
+MIN_CLASS = 20
+# A driver's count within one route, before it is said at all.
+MIN_DRIVER = 10
+
+
+def game_class(api: str, native_dlss: bool, upscaler: str = "") -> str:
+    """'DX12/dlss', 'DX11/none'... - the key the published tables use."""
+    up = "dlss" if native_dlss else (upscaler if upscaler in ("fsr", "xess") else "none")
+    api = str(api or "").strip().upper()
+    return f"{api}/{up}" if api else ""
 
 
 def record(game, route: str, result: str, *, api: str = "", build: str = "",
            gpu_sm=None, gpu_name: str = "", driver: str = "",
            version: str = "", measured: dict | None = None,
-           said_by: str = "") -> dict:
+           said_by: str = "", upscaler: str = "") -> dict:
     """The one block a shared result carries. Nothing identifying in it.
 
     `measured` is what the session cost - the work area it ran at, the
@@ -66,6 +91,9 @@ def record(game, route: str, result: str, *, api: str = "", build: str = "",
     person answered it (verdicts.outcome() is None), and "crash" when
     Windows recorded the game faulting: the list then knows where the answer
     came from, not only what it was.
+
+    `upscaler` is what the game ships - "dlss", "fsr", "xess" or "none" -
+    so a result can be counted with the games like it (game_class).
     """
     exe = getattr(getattr(game, "exe", None), "name", "") or ""
     rec = {
@@ -89,6 +117,8 @@ def record(game, route: str, result: str, *, api: str = "", build: str = "",
             rec[key] = int(value) if key == "res" else round(float(value), 2)
     if said_by in ("person", "crash"):
         rec["by"] = said_by
+    if upscaler in UPSCALER_CLASSES:
+        rec["up"] = upscaler
     return rec
 
 
@@ -183,12 +213,48 @@ def fetch(force: bool = False) -> dict:
             return {}
 
 
+def cached() -> dict:
+    """The list as it was last fetched, from disk only. {} when there is none.
+
+    For the route recommendation, which runs on every game entry and may not
+    wait on the network: the first run without a copy recommends by the
+    tool's own rules, the same as offline. The library asks once per game,
+    so the parsed file is kept until the file itself changes.
+    """
+    global _CACHED
+    p = _cache()
+    try:
+        stamp = p.stat().st_mtime_ns
+    except OSError:
+        return {}
+    if _CACHED is not None and _CACHED[0] == stamp:
+        return _CACHED[1]
+    try:
+        data = json.loads(p.read_text(encoding="utf8"))
+    except (OSError, ValueError):
+        return {}
+    data = data if isinstance(data, dict) else {}
+    _CACHED = (stamp, data)
+    return data
+
+
+_CACHED: tuple | None = None
+
+
 def for_game(data: dict, game) -> dict | None:
     """The entry for this game, keyed by executable name."""
     exe = getattr(getattr(game, "exe", None), "name", "") or ""
     if not exe:
         return None
     return (data.get("games") or {}).get(exe.lower())
+
+
+def reports_for(data: dict, exe) -> int:
+    """How many shared results this executable has, over every route."""
+    name = getattr(exe, "name", exe) or ""
+    entry = ((data or {}).get("games") or {}).get(str(name).lower()) if name else None
+    return sum(rate(r)[1] for r in ((entry or {}).get("routes") or {}).values()
+               if isinstance(r, dict))
 
 
 def advice(entry: dict | None, route: str = "", driver: str = "") -> list[str]:
@@ -331,15 +397,25 @@ def rate(counts: dict) -> tuple[int, int]:
     return w, w + f
 
 
-def driver_note(data: dict, driver: str) -> str:
+def driver_note(data: dict, driver: str, route: str = "") -> str:
     """What this driver does across every game, or "".
 
     Said with its denominator. "616.92 faults" is a rumour; "7 of the 25
     reports on 616.92 worked, against 7 of 11 on 616.56" is the reason to
     roll back, and it is the tool's own shared data saying it.
+
+    With a `route`, the count is the one inside that route (by_driver in the
+    published file), and another driver is named only when it is NEWER, has
+    MIN_DRIVER results on the same route, and its range clears this one's.
+    Across all routes a driver's rate is mostly its route mix: 616.64 was
+    7 of 28 and 617.14 16 of 22, but 22 of 616.64's results were feeder
+    ones against 5 of 617.14's. So a route that has no table of its own
+    gets the plain count and nothing compared.
     """
     if not driver:
         return ""
+    if route:
+        return _driver_in_route(data, driver, route)
     all_ = totals(data).get("drivers") or {}
     w, n = rate(all_.get(driver))
     if n < MIN_REPORTS:
@@ -374,7 +450,126 @@ def confidence(worked: int, tried: int) -> float:
     return max(0.0, (centre - spread) / denom)
 
 
-def rank_routes(data: dict, game, offer: list[str] | None = None) -> list[tuple[str, str]]:
+def ceiling(worked: int, tried: int) -> float:
+    """The upper end of the same interval: the best this rate could be."""
+    if tried <= 0:
+        return 1.0
+    worked = max(0, min(int(worked), int(tried)))
+    return 1.0 - confidence(int(tried) - worked, int(tried))
+
+
+def _table(data: dict, name: str, key: str) -> dict:
+    """{route: {"worked": n, "failed": n}} for one row of a published table.
+
+    The tables arrived with 2.0.6; a list published before has none, and
+    then every caller behaves as it did before."""
+    row = ((data or {}).get(name) or {}).get(key) if isinstance((data or {}).get(name), dict) else None
+    return {r: c for r, c in row.items() if isinstance(c, dict)} if isinstance(row, dict) else {}
+
+
+def _driver_key(v: str) -> tuple:
+    try:
+        return tuple(int(x) for x in str(v).split("."))
+    except ValueError:
+        return ()
+
+
+def _driver_in_route(data: dict, driver: str, route: str) -> str:
+    table = (data or {}).get("by_driver")
+    if isinstance(table, dict) and table:
+        w, n = rate(_table(data, "by_driver", driver).get(route))
+        if n < MIN_DRIVER:
+            return ""
+        line = f"Shared results with the {route} route on driver {driver}: {w} of {n} worked."
+        mine = _driver_key(driver)
+        better = []
+        for other in table:
+            if not mine or _driver_key(other) <= mine:
+                continue                  # never an older driver
+            w2, n2 = rate(_table(data, "by_driver", other).get(route))
+            if n2 >= MIN_DRIVER and confidence(w2, n2) > ceiling(w, n):
+                better.append((confidence(w2, n2), other, w2, n2))
+        if better:
+            _c, other, w2, n2 = max(better)
+            line += f" On {other}: {w2} of {n2}."
+        return line
+    # An older list: the driver across every route, with no comparison.
+    w, n = rate((totals(data).get("drivers") or {}).get(driver))
+    if n < MIN_DRIVER:
+        return ""
+    return f"On driver {driver}, {w} of {n} shared results worked (all routes)."
+
+
+def class_counts(data: dict, klass: str) -> dict:
+    """{route: counts} for a class of games (game_class), or {}."""
+    return _table(data, "by_class", klass) if klass else {}
+
+
+def class_pick(data: dict, klass: str, offer: list[str] | None,
+               current: str) -> tuple[str, str]:
+    """(route, why) when the shared results for games like this one clearly
+    favour another offered route over `current`; ("", "") otherwise.
+
+    Clearly means: both routes have MIN_CLASS results in the class, and the
+    lowest rate the other route's results allow is above the highest rate
+    the current route's allow (95% Wilson, both ends). Two overlapping
+    ranges are not a finding, however far apart the plain rates look. The
+    per-game rule (MIN_REPORTS results for THIS game) is advice() and
+    rank_routes() and runs before any of this; this only speaks for a game
+    too few people have reported.
+    """
+    rows = class_counts(data, klass)
+    w, n = rate(rows.get(current))
+    if not rows or n < MIN_CLASS:
+        return "", ""
+    best = None
+    for name in offer or []:
+        if name == current:
+            continue
+        w2, n2 = rate(rows.get(name))
+        if n2 >= MIN_CLASS and confidence(w2, n2) > ceiling(w, n):
+            if best is None or confidence(w2, n2) > best[0]:
+                best = (confidence(w2, n2), name, w2, n2)
+    if best is None:
+        return "", ""
+    _c, name, w2, n2 = best
+    return name, (f"Shared results for {class_words(klass)}: the {name} route "
+                  f"worked in {w2} of {n2}, the {current} route in {w} of {n}.")
+
+
+def class_words(klass: str) -> str:
+    """'DX12/dlss' -> 'DirectX 12 games with their own DLSS'."""
+    api, _, up = str(klass or "").partition("/")
+    tail = {"dlss": " with their own DLSS", "fsr": " with FSR and no DLSS",
+            "xess": " with XeSS and no DLSS",
+            "none": " with no DLSS, FSR or XeSS"}.get(up, "")
+    name = {"DX8": "DirectX 8", "DX9": "DirectX 9", "DX10": "DirectX 10",
+            "DX11": "DirectX 11", "DX12": "DirectX 12", "VULKAN": "Vulkan",
+            "OPENGL": "OpenGL", "UNKNOWN": "unread-API"}.get(api.upper(), api)
+    return f"{name} games{tail}"
+
+
+def class_line(data: dict, klass: str, route: str,
+               offer: list[str] | None = None) -> str:
+    """The counts for this route in this class of games, with the offered
+    route that did best beside it, or "". Said, never acted on."""
+    rows = class_counts(data, klass)
+    w, n = rate(rows.get(route))
+    if n < MIN_REPORTS:
+        return ""
+    line = (f"Shared results for {class_words(klass)}: the {route} route "
+            f"worked in {w} of {n}.")
+    others = [(confidence(*rate(rows.get(o))), o, *rate(rows.get(o)))
+              for o in (offer or []) if o != route
+              and rate(rows.get(o))[1] >= MIN_REPORTS]
+    if others:
+        _c, o, w2, n2 = max(others)
+        line += f" The {o} route: {w2} of {n2}."
+    return line
+
+
+def rank_routes(data: dict, game, offer: list[str] | None = None,
+                klass: str = "") -> list[tuple[str, str]]:
     """`offer`, ordered by what other people's results say, best first, each
     with the counts that put it there ("" for a route nobody has reported).
 
@@ -386,8 +581,9 @@ def rank_routes(data: dict, game, offer: list[str] | None = None) -> list[tuple[
     rest of this module uses:
 
       1. what happened to THIS game, for anybody who reported it;
-      2. what happened to that route across every game, once there are
-         enough reports to mean anything (MIN_REPORTS);
+      2. what happened to that route in games like this one (`klass`, see
+         game_class) - or, with no such table, across every game - once
+         there are enough reports to mean anything (MIN_REPORTS);
       3. the order it was offered in, for everything nobody has tried.
 
     It never drops a route and never adds one: the same names come back.
@@ -395,6 +591,16 @@ def rank_routes(data: dict, game, offer: list[str] | None = None) -> list[tuple[
     entry = for_game(data, game) or {}
     here = entry.get("routes") or {}
     everywhere = (totals(data) or {}).get("routes") or {}
+    alike = class_counts(data, klass)
+    # One yardstick for every route: once games like this one have enough
+    # results on any offered route, that table ranks them all - the same
+    # table the recommendation reads (class_pick). Half class, half every
+    # game would put a route's DX12-with-DLSS rate against another's rate
+    # over every kind of game.
+    if any(rate(alike.get(o))[1] >= MIN_REPORTS for o in offer or []):
+        everywhere, where = alike, f"in {class_words(klass)}"
+    else:
+        where = "across every game shared"
     scored = []
     for i, name in enumerate(offer or []):
         w, n = rate(here.get(name))
@@ -404,7 +610,7 @@ def rank_routes(data: dict, game, offer: list[str] | None = None) -> list[tuple[
             why = f"{w} of {n} in this game"
         elif w2 and n2 >= MIN_REPORTS:           # or that route, somewhere
             rank, share, seen = 2, confidence(w2, n2), n2
-            why = f"{w2} of {n2} across every game shared"
+            why = f"{w2} of {n2} {where}"
         elif n:
             # tried in this game and never once worked. Below a route nobody
             # has tried: ordering these by their own numbers put the route
@@ -419,7 +625,8 @@ def rank_routes(data: dict, game, offer: list[str] | None = None) -> list[tuple[
     return [(name, why) for _r, _s, _n, _i, name, why in scored]
 
 
-def next_route(data: dict, game, tried: str, offer: list[str] | None = None) -> str:
+def next_route(data: dict, game, tried: str, offer: list[str] | None = None,
+               klass: str = "") -> str:
     """One sentence naming the route to try next, or "".
 
     After a route has failed the tool used to say nothing about what else to
@@ -443,8 +650,15 @@ def next_route(data: dict, game, tried: str, offer: list[str] | None = None) -> 
         return (f"In this game the {n} route is reported working by {w} of "
                 f"{t}. Try that next - pick it in the route dropdown and "
                 f"install again.")
-    # Otherwise the whole set, and only where there is enough of it.
+    # Otherwise games like this one when enough of them are in the list
+    # (rank_routes reads the same table), else the whole set - and only
+    # where there is enough of it.
     all_ = totals(data).get("routes") or {}
+    where = "Across every game shared"
+    alike = class_counts(data, klass)
+    if any(rate(c)[1] >= MIN_REPORTS for n, c in alike.items()
+           if n != tried and (allowed is None or n in allowed)):
+        all_, where = alike, f"Across {class_words(klass)}"
     mine_w, mine_n = rate(all_.get(tried))
     ranked = [(n, *rate(c)) for n, c in all_.items()
               if n != tried and rate(c)[1] >= MIN_REPORTS
@@ -455,7 +669,7 @@ def next_route(data: dict, game, tried: str, offer: list[str] | None = None) -> 
     n, w, t = ranked[0]
     if mine_n and w * mine_n <= mine_w * t:
         return ""                    # nothing on offer does better
-    return (f"Nobody has reported this game yet. Across every game shared, "
+    return (f"Nobody has reported this game yet. {where}, "
             f"the {n} route worked in {w} of {t} tries"
             + (f", against {mine_w} of {mine_n} for {tried}" if mine_n else "")
             + " - it is the next one to try.")
@@ -476,7 +690,10 @@ def issue_url(rec: dict, note: str = "") -> str:
             + ("Windows recorded the game crashing in this session.\n\n"
                if rec.get("by") == "crash" else "")
             + f"- api: {rec.get('api') or '-'}\n"
-            f"- build: {rec.get('build') or '-'}\n"
+            + ({"dlss": "- the game ships: DLSS\n", "fsr": "- the game ships: FSR, no DLSS\n",
+                "xess": "- the game ships: XeSS, no DLSS\n",
+                "none": "- the game ships: no DLSS, FSR or XeSS\n"}.get(rec.get("up"), ""))
+            + f"- build: {rec.get('build') or '-'}\n"
             f"- gpu: {rec.get('gpu') or '-'} ({rec.get('sm') or '-'}), "
             f"driver {rec.get('driver') or '-'}\n"
             f"- tool: {rec.get('tool') or '-'}\n"

@@ -46,12 +46,17 @@ GROUPS = (
         ("fg", "frame generation  (FSR 3.1, 2x)", "toggle", "D3D12; turn the game's own frame generation off"),
         ("mfg", "multi-frame generation 3x/4x  (RTX 40)", "toggle",
          "dashdogy's RTX40MFG-Unlock with the Ultimate ASI Loader - research software"),
+        ("own_fg", "frame generation files", "dd",
+         "RTX 30: dlssg_for_sm86; RTX 20/30: DLSS Enabler - downloaded by you; experimental, out again on uninstall"),
         ("dxvk", "run through DXVK (Vulkan)", "toggle",
          "for games that close when ReShade loads inside them; DirectX 8 and 9 always go through DXVK"),
         ("vr", "VR headset (OpenXR layer)", "toggle", "registers ReShade's OpenXR layer so the pass runs on what the "
                                                       "headset shows"),
         ("remix_swap", "swap the Remix runtime", "toggle",
          "only needed when this mod's runtime has no DLSS 5 pass; the mod's own comes back on uninstall"),
+        ("gpu_pref", "use the NVIDIA card (Windows setting)", "toggle",
+         "sets Windows' graphics setting to High performance for the game, so it does not draw on the other "
+         "GPU; a choice you made there is kept, uninstall takes it out"),
         ("overlay_key", "overlay key", "dd", "the key that opens the overlay in the game"),
     )),
 )
@@ -158,6 +163,9 @@ class SettingsSection:
             if key == "renodx":
                 k.link(x + w, y, "use my file", a.pick_renodx, glyph="file", colour=T.DIM, anchor="e", tags=tags,
                        size=8)
+            if key == "own_fg":
+                k.link(x + w, y, "add your own...", a.pick_own_fg, glyph="file", colour=T.DIM, anchor="e",
+                       tags=tags, size=8)
             return T.px(74)
         if kind == "toggle":
             t = k.toggle(x, y + T.px(14), label, bool(a.settings.get(key)),

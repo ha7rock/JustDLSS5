@@ -3,7 +3,7 @@ from dataclasses import dataclass, replace, field
 from pathlib import Path
 from stat import S_ISREG
 
-from .backend import games, gpu, dlss, installer, components, diagnose, video, sources, anticheat, mfg, library, update
+from .backend import games, gpu, dlss, installer, components, diagnose, video, sources, anticheat, mfg, library, update, community, prefs, ownfg, gpupref
 
 
 @dataclass
@@ -35,6 +35,8 @@ class Inspection:
     vendor: str = ""
     bitness_override: int | None = None
     gpu_sm: int | None = None
+    hybrid_gpu: bool = False
+    own_fg_available: list = field(default_factory=list)
 
 
 class BackendService:
@@ -77,6 +79,18 @@ class BackendService:
             found = games.scan_all(progress=progress)
         else:
             found, _ = games.quick_scan([entry.game for entry in self._entries], progress=progress)
+        manual = prefs.get("manual_folders", [])
+        seen = {str(g.folder).casefold() for g in found}
+        for folder in manual if isinstance(manual, list) else []:
+            if not isinstance(folder, str) or not Path(folder).is_absolute() or not Path(folder).is_dir() or folder.casefold() in seen:
+                continue
+            try:
+                game = games.manual(Path(folder))
+            except (OSError, ValueError):
+                continue
+            if game.exe and self.has_game_files(game):
+                found.append(game)
+                seen.add(folder.casefold())
         known = video.known()
         if known and not any(g.folder == known.folder for g in found):
             found.append(known)
@@ -109,6 +123,13 @@ class BackendService:
         game = games.manual(Path(path))
         if not game.exe:
             raise ValueError("未找到游戏程序 / No game executable found")
+        same = next((item for item in self._entries if item.game.exe == game.exe), None)
+        if same:
+            return same
+        folders = prefs.get("manual_folders", [])
+        folders = [f for f in folders if isinstance(f, str)] if isinstance(folders, list) else []
+        if str(game.folder).casefold() not in {f.casefold() for f in folders}:
+            prefs.set_("manual_folders", folders + [str(game.folder)])
         entry = self.decorate(game)
         self._remember(entry)
         return entry
@@ -133,7 +154,7 @@ class BackendService:
         game = entry.game
         name, sm = self.hardware()
         driver = gpu.driver_version() or ""
-        support = dlss.detect(game.install_dir, game.folder, game.api, game.bitness or 0, sm, driver=driver)
+        support = dlss.detect(game.install_dir, game.folder, game.api, game.bitness or 0, sm, driver=driver, shared=community.cached(), exe=game.exe)
         fit = {route: dlss.fit(route, game.api, support.native_dlss, sm,
                               upscaler=support.upscaler) for route in support.options}
         options = installer.options_from_manifest(game.install_dir) if entry.installed else None
@@ -150,7 +171,7 @@ class BackendService:
                           mfg.applies(sm, game.api, game.install_dir, game.folder)[0],
                           driver, gpu.hdr_on() is True,
                           (gpu.other_vendor() or "") if not name else "",
-                          games.bitness_override(game.folder), sm)
+                          games.bitness_override(game.folder), sm, gpupref.hybrid(), ownfg.available())
 
     def set_architecture(self, entry, bitness):
         if bitness is not None and (type(bitness) is not int or bitness not in (32, 64)):
@@ -195,6 +216,15 @@ class BackendService:
         data = community.fetch()
         game_data = community.for_game(data, entry.game)
         lines = community.advice(game_data, route, gpu.driver_version() or "")
+        support = dlss.detect(entry.game.install_dir, entry.game.folder, entry.game.api, entry.game.bitness or 0, self.hardware()[1])
+        klass = community.game_class(entry.game.api, support.native_dlss, support.upscaler)
+        if community.reports_for(data, entry.game.exe) < community.MIN_REPORTS:
+            note = community.class_line(data, klass, route, support.options)
+            if note:
+                lines.append(note)
+        note = community.driver_note(data, gpu.driver_version() or "", route)
+        if note:
+            lines.append(note)
         counts = (game_data or {}).get("routes", {}).get(route)
         if counts:
             successes, total = community.rate(counts)

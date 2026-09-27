@@ -565,14 +565,18 @@ def find_legacy(exe_dir: Path) -> list[Path]:
     return [exe_dir / n for n in LEGACY_FILES if (exe_dir / n).exists()]
 
 
-def suggest_proxy(exe_dir: Path) -> str:
+def suggest_proxy(exe_dir: Path, avoid=()) -> str:
     """A proxy name that is not already taken by something else.
 
     A game shipping its own dxgi.dll (an ENB, a DXVK build, its own wrapper)
     would have it replaced. Backups make that reversible, but stepping aside
-    is better than relying on the undo.
+    is better than relying on the undo. `avoid` holds names something else
+    of this install needs (the person's own frame generation files, #370).
     """
+    skip = {str(n).lower() for n in avoid}
     for name in PROXY_NAMES:
+        if name.lower() in skip:
+            continue
         p = exe_dir / name
         if not p.exists() or is_optiscaler(p):
             return name

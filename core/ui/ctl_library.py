@@ -29,6 +29,44 @@ def first_line(e: Exception) -> str:
     return (str(e).splitlines() or [""])[0] or type(e).__name__
 
 
+# Folders picked with "add a game" (#441). The saved library is dropped on a
+# new version and a full scan finds only what launchers list, so a folder
+# added by hand is remembered here and put back by every full scan.
+MANUAL_KEY = "manual_folders"
+
+
+def remember_manual(folder) -> None:
+    have = [str(f) for f in (prefs.get(MANUAL_KEY, []) or []) if isinstance(f, str)]
+    if str(folder).lower() not in {f.lower() for f in have}:
+        prefs.set_(MANUAL_KEY, have + [str(folder)])
+
+
+def with_manual(gs: list) -> list:
+    """The scanned games plus the folders added by hand. Worker thread only:
+    it reads each folder's executables."""
+    have = {str(g.folder).lower() for g in gs}
+    out = list(gs)
+    # prefs.json is a file people edit: only a list of absolute folders counts
+    v = prefs.get(MANUAL_KEY, [])
+    for f in v if isinstance(v, list) else []:
+        if not isinstance(f, str) or not Path(f).is_absolute():
+            continue
+        p = Path(f)
+        if str(p).lower() in have or not p.is_dir():
+            continue
+        try:
+            g = games.manual(p)
+        except Exception:
+            log.exception(f"reading the added folder {p}")
+            continue
+        if g.exe:
+            # after the scanned ones: a store's entry for the same exe wins
+            # the one-entry-per-exe merge
+            out.append(g)
+            have.add(str(p).lower())
+    return out
+
+
 class LibraryControl:
     # ------------------------------------------------------------ state
     def _library_init(self) -> None:
@@ -87,7 +125,7 @@ class LibraryControl:
             if not ok:
                 return False, "-", installer.EXPERIMENTAL, "-", False, ""
             sup = dlss.detect(g.install_dir, g.folder, g.api, g.bitness or 0, sm,
-                              driver=gpu.driver_version())
+                              driver=gpu.driver_version(), shared=community.cached(), exe=g.exe)
             level, _ = installer.reliability(g, sup.recommended)
             outlook = {installer.STABLE: "reliable", installer.BETA: "beta",
                        installer.EXPERIMENTAL: "often fails"}[level]
@@ -600,7 +638,7 @@ class LibraryControl:
             self.q.put(("scanned", (gs, rows)))
 
         def work():
-            gs = games.scan_all(progress=lambda m: self.q.put(("scan", m)))
+            gs = with_manual(games.scan_all(progress=lambda m: self.q.put(("scan", m))))
             sm = self._sm()
             rows = rows_for(gs, sm)
             library.save(gs, rows, update.VERSION, sm)
@@ -789,7 +827,24 @@ class LibraryControl:
         if not g.exe:
             self.shell.error("no executable here", f"No executable was found in:\n{d}")
             return
+        # A game the scan already found, under a name the person did not
+        # search for: open that one, and bring it back if it was hidden - a
+        # second card for the same executable only merged on the next start.
+        same = next((x for x in self.all_games if getattr(x, "exe", None)
+                     and (x.exe == g.exe or x.folder == g.folder)), None)
+        if same is not None:
+            if str(same.folder) in self.hidden():
+                self.set_hidden(same, False)
+            self.query = ""
+            self.filter = "all"
+            self.shell.status(f"{same.name} is already in the list")
+            self.open_game(same)
+            return
         self.all_games.insert(0, g)
+        try:
+            remember_manual(g.folder)
+        except Exception:
+            log.exception("remembering the added folder")
         self.query = ""
         self.filter = "all"
         self._read_rows([g])

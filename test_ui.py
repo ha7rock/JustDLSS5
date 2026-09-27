@@ -54,6 +54,27 @@ class FakeService:
 
 
 class DesktopTests(unittest.TestCase):
+    def test_local_frame_generation_and_gpu_preference_roundtrip(self):
+        self.select_game()
+        self.window.inspection.hybrid_gpu = True
+        self.window.inspection.own_fg_available = ["sm86"]
+        self.window._apply_options(installer.Options(path=dlss.OPTI, own_fg="sm86", gpu_pref=False))
+        self.window._route_changed()
+        self.assertEqual(self.window._options().own_fg, "sm86")
+        self.assertFalse(self.window._options().gpu_pref)
+        self.window.gpu_preference.setChecked(True)
+        self.assertTrue(self.window._options().gpu_pref)
+        self.window._combo(self.window.route_combo, dlss.FEEDER)
+        self.window._route_changed()
+        self.assertEqual(self.window._options().own_fg, "")
+
+    def test_failed_install_refreshes_rolled_back_state(self):
+        self.select_game()
+        self.window.current.installed = True
+        self.window._refresh_install_status(self.window.current)
+        self.drain()
+        self.assertFalse(self.window.current.installed)
+
     def test_context_help_hover_delay_leave_and_language(self):
         from frontend.controls import HelpButton
         for language, fragment in ((0, "不是锁帧"), (1, "frame limiter")):

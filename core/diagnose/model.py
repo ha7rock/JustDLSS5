@@ -248,6 +248,15 @@ _CRASH_CAUSES = (
     # line is "URLError: <urlopen error [Errno 11001] getaddrinfo failed>").
     ("getaddrinfo", "this PC could not look up the download's address"),
     ("gaierror", "this PC could not look up the download's address"),
+    # By the code, ahead of the words: the WinError text is in the PC's own
+    # language (#26 is German), and #438's EOF line also says "SSL", which
+    # the next key would have read as a broken certificate exchange.
+    ("winerror 10013", "Windows blocked this tool's connection"),
+    ("unexpected_eof", "the connection was cut off during the download"),
+    ("eof occurred in violation", "the connection was cut off during the download"),
+    ("winerror 10054", "the connection was reset part way through"),
+    ("winerror 10060", "the download timed out"),
+    ("winerror 10061", "the download server refused the connection"),
     ("ssl", "the secure connection to the download failed"),
     ("timed out", "the download timed out"),
     ("connectionreset", "the connection was reset part way through"),

@@ -640,6 +640,14 @@ class MainWindow(QMainWindow):
         self.mfg_check = QCheckBox(self.t("RTX 40 MFG（实验性）", "RTX 40 MFG (experimental)"))
         self.mfg_check.setToolTip(self.t("需游戏自带 DLSS 补帧并保持开启。在 ReShade 面板选择 3x/4x；可能产生画面错误或崩溃。", "Requires the game's DLSS frame generation enabled. Select 3x/4x in ReShade; may cause artifacts or crashes."))
         form.addRow(self.mfg_check)
+        self.own_fg = ComboBox()
+        self.own_fg.addItem(self.t("无", "None"), "")
+        self.own_fg_add = button(self.t("添加自备文件…", "Add local files…"), self.pick_own_fg)
+        form.addRow(self.t("自备补帧文件（实验性）", "Local frame generation (experimental)"), self.own_fg)
+        form.addRow(self.own_fg_add)
+        self.gpu_preference = QCheckBox(self.t("使用 NVIDIA 显卡（Windows 设置）", "Use NVIDIA GPU (Windows setting)"))
+        self.gpu_preference.setToolTip(self.t("安装时设置此游戏的高性能显卡偏好；保留已有选择，卸载时还原本工具的设置。", "Sets this game's high-performance GPU preference on install; preserves existing choices and restores ours on uninstall."))
+        form.addRow(self.gpu_preference)
         form.addRow(self._help_heading(self.t("Feeder 设置", "Feeder settings"), "feed"))
         self.provider_combo = ComboBox()
         for key, value in reshade_ini.PROVIDERS.items():
@@ -1156,6 +1164,15 @@ class MainWindow(QMainWindow):
         self.remix_swap.setChecked(options.remix_swap)
         self.fg_check.setChecked(options.fg)
         self.mfg_check.setChecked(options.mfg)
+        self.gpu_preference.setVisible(bool(self.inspection and self.inspection.hybrid_gpu))
+        self.gpu_preference.setChecked(options.gpu_pref)
+        self.own_fg.clear()
+        self.own_fg.addItem(self.t("无", "None"), "")
+        from .backend import ownfg
+        for key in dict.fromkeys([*(self.inspection.own_fg_available if self.inspection else []), options.own_fg]):
+            if key:
+                self.own_fg.addItem(ownfg.label(key), key)
+        self._combo(self.own_fg, options.own_fg)
         self.vr_check.setChecked(options.vr)
         for combo, value in ((self.provider_combo, options.provider), (self.preset_combo, options.feed.get("preset", next(iter(feedcfg.PRESETS)))),
                              (self.hdr_combo, options.feed.get("hdr", next(iter(feedcfg.HDR)))), (self.proxy_combo, options.reshade_proxy),
@@ -1171,6 +1188,28 @@ class MainWindow(QMainWindow):
         self.local_addon = options.renodx_local
         self._local_addon_label()
         self._route_changed()
+
+    def pick_own_fg(self):
+        if self.busy_job or self._game_tool_busy():
+            return
+        from .backend import ownfg
+        selected_key = self.current.key if self.current else None
+        paths, _ = QFileDialog.getOpenFileNames(self, self.t("选择自备 version.dll 及配套 ini", "Select your version.dll and accompanying ini"), "", "DLL / INI (*.dll *.ini)")
+        if not paths:
+            return
+        def work(emit):
+            key, files = ownfg.identify([Path(p) for p in paths])
+            ownfg.store(key, files)
+            return key
+        def ready(key):
+            if not self.current or self.current.key != selected_key:
+                self.status.setText(self.t("补帧文件已保存。", "Frame generation files saved."))
+                return
+            if self.own_fg.findData(key) < 0:
+                self.own_fg.addItem(ownfg.label(key), key)
+            self._combo(self.own_fg, key)
+            self.status.setText(self.t("文件已保存，将在下一次安装时应用。", "Files saved; applied on the next install."))
+        self._submit(work, ready, busy=True, title=self.t("正在检查补帧文件…", "Checking frame generation files…"), controls=(self.own_fg_add,))
 
     def _options(self):
         route = self.route_combo.currentData() or self.options.path
@@ -1191,6 +1230,8 @@ class MainWindow(QMainWindow):
                        fg=self.fg_check.isEnabled() and self.fg_check.isChecked(),
                        mfg=self.mfg_check.isEnabled() and self.mfg_check.isChecked(),
                        vr=self.vr_check.isEnabled() and self.vr_check.isChecked(),
+                       gpu_pref=bool(self.inspection and self.inspection.hybrid_gpu and self.gpu_preference.isChecked()),
+                       own_fg=(self.own_fg.currentData() or "") if self.own_fg.isEnabled() else "",
                        opti_build=self.opti_build.currentData() or "",
                        renodx_local=self.local_addon, reshade_proxy=self.proxy_combo.currentData() or "",
                        opti_proxy=self.opti_proxy.currentData() or "", feeder_prerelease=feeder == "__pre__",
@@ -1265,6 +1306,8 @@ class MainWindow(QMainWindow):
         self.nr_preset.setEnabled(route == dlss.OPTI)
         self.nr_style.setEnabled(route == dlss.OPTI)
         self.opti_proxy.setEnabled(route == dlss.OPTI)
+        self.own_fg.setEnabled(route == dlss.OPTI and self.current.game.api == "DX12")
+        self.own_fg_add.setEnabled(self.own_fg.isEnabled())
         self.opti_build.setEnabled(route == dlss.OPTI)
         for index in range(self.opti_build.count()):
             key = self.opti_build.itemData(index)
@@ -1380,8 +1423,18 @@ class MainWindow(QMainWindow):
             return
         self._submit(lambda emit: self.service.install(entry, options, emit),
                      lambda report: self._installed(entry, report), busy=True,
-                     title=self.t("正在安装 · 可在任务页查看进度", "Installing · progress in Activity"))
+                     title=self.t("正在安装 · 可在任务页查看进度", "Installing · progress in Activity"),
+                     failed=lambda error: self._refresh_install_status(entry))
         self.navigate(2)
+
+    def _refresh_install_status(self, entry):
+        def ready(installed):
+            entry.installed = installed
+            self.model.refresh()
+            self._filter()
+            if self.current and self.current.key == entry.key:
+                self._route_changed()
+        self._submit(lambda emit: bool(entry.game.installed), ready)
 
     def _installed(self, entry, report):
         entry.installed = True
@@ -1428,6 +1481,7 @@ class MainWindow(QMainWindow):
         menu.addAction(self.t("自动尝试路线（实验性）", "Automatic route trials (experimental)"), self.automatic_trials)
         menu.addAction(self.t("更新 / 还原 DLSS 文件", "Update / restore DLSS files"), self.manage_runtimes)
         menu.addAction(self.t("还原 Remix 模组安装", "Restore Remix mod installation"), self.remove_remix)
+        menu.addAction(self.t("上游兼容性列表 ↗", "Upstream compatibility list ↗"), lambda: QDesktopServices.openUrl(QUrl("https://kizzuwatnaa.github.io/DLSS5-Autopilot/")))
         menu.addSeparator()
         action = menu.addAction(self.t("卸载增强组件", "Uninstall components"), self.uninstall_selected)
         action.setEnabled(self.current.installed)

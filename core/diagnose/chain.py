@@ -384,12 +384,14 @@ def _foreign_reshade(install_dir: Path, since: float, rep: Report,
         # renodx-dlss5 by its own name; the feeder's, bridge's and the other
         # add-ons of ours are not renodx (gate 2.0.5, pass 2).
         _renodx = all(n.strip().lower() == NATIVE_ADDON_NAME.lower() for n in ours)
-        _called = "renodx-dlss5" if _renodx else "an add-on of this tool's"
+        _called = ("renodx-dlss5" if _renodx else "an add-on this tool installs"
+                   if len(ours) == 1 else "add-ons this tool installs")
         rep.add(BAD, f"A ReShade with {_called} is still loading in this "
                      "game: " + ", ".join(ours),
                 (f"renodx-dlss5 is the add-on this tool's ReShade routes "
                  f"install, and other DLSS 5 tools ship it too" if _renodx else
-                 f"{', '.join(ours)} is what this tool's ReShade routes "
+                 f"{', '.join(ours)} {'is' if len(ours) == 1 else 'are'} what "
+                 f"this tool's ReShade routes "
                  f"install")
                 + (f" - this folder had one of this tool's earlier installs "
                    f"({notes[-1]})" if notes else
@@ -479,10 +481,17 @@ def _analyse(install_dir: Path, last_error: str, foreign: list) -> Report:
     # Nothing below this can mean anything until the install is finished.
     if man.get("complete") is False:
         from .. import net as _net
+        # 2.0.6 takes a failed fresh install back out and keeps a record of
+        # the reason only: "whatever came before is in place" is then a
+        # sentence about files that are gone.
+        rolled = _net.ROLLED_BACK_NOTE in (man.get("notes") or [])
         if _net.DISK_FULL_NOTE in (man.get("notes") or []):
             rep.add(BAD, "The install stopped because the drive was full.",
-                    "Whatever had not been written yet is missing, which is "
-                    "why files are listed as gone. Free up a few hundred MB "
+                    ("What it had written was taken back out again. "
+                     if rolled else
+                     "Whatever had not been written yet is missing, which is "
+                     "why files are listed as gone. ")
+                    + "Free up a few hundred MB "
                     "on the game's drive and on the one %LOCALAPPDATA% is on, "
                     "then install again.")
             rep.verdict = "The drive was full - free up space and install again."
@@ -491,9 +500,12 @@ def _analyse(install_dir: Path, last_error: str, foreign: list) -> Report:
                         if isinstance(n, str) and n.startswith(_net.STOP_NOTE)), "")
         if stopped:
             rep.add(BAD, "The install was stopped before it finished.",
-                    f"It said: {stopped.rstrip('.')}. Whatever came before "
-                    f"that step is in "
-                    f"place; nothing after it was written.")
+                    f"It said: {stopped.rstrip('.')}. "
+                    + ("What it had written before that step was taken back "
+                       "out, so nothing of it is in this folder."
+                       if rolled else
+                       "Whatever came before that step is in "
+                       "place; nothing after it was written."))
             rep.verdict = "The install stopped for a reason of its own - see below."
             return rep
         # An uninstall that could not remove everything records itself the
@@ -506,6 +518,11 @@ def _analyse(install_dir: Path, last_error: str, foreign: list) -> Report:
                     "uninstall again.")
             rep.verdict = ("The uninstall left files behind - close the game "
                            "and uninstall again.")
+            return rep
+        # The install's own traceback, when it names the connection fault
+        # (#434: Windows refused the socket - "install again" gets the same
+        # refusal). evidence._net_stop.
+        if _net_stop(rep, last_error):
             return rep
         # Only files that were written and have since gone can be named:
         # what a cut-off download never fetched was never recorded.
@@ -645,6 +662,10 @@ def _analyse(install_dir: Path, last_error: str, foreign: list) -> Report:
     # settings put it in D3D9 mode. The feed has nothing to hook.
     d3d9_only = bool(rtext) and "Direct3DCreate9" in rtext \
         and "CreateSwapChain" not in rtext
+    # Set when ReShade's own d3d9.dll stands in front of DXVK (#348): that
+    # explains everything the feed then fails to do, so it is the verdict
+    # whatever the chain below settles on - short of frames delivered.
+    rs_verdict = ""
 
     # --- what loaded ----------------------------------------------------
     if rtext:
@@ -782,14 +803,71 @@ def _analyse(install_dir: Path, last_error: str, foreign: list) -> Report:
         feeder_on = any("Feed" in n for n in loaded)
         bridge_on = any("Bridge" in n for n in loaded)
         if feeder_on and bridge_on:
+            # "DLSS 5 DX11 Bridge" is the bridge's name up to 1.1.0, in a file
+            # called dlss5-dx11-bridge.addon64 that only the bridge route
+            # clears away - on the feeder route it stays and loads (#439).
+            old_bridge = any("DX11 Bridge" in n for n in loaded)
             rep.add(BAD, "Both the feeder and the bridge add-on are loaded.",
                     "Only one route may be installed at a time. This is "
                     "usually an orphan from an earlier install that the "
-                    "manifest never recorded. Uninstall, check no "
-                    "dlss5-feed.addon64 or dlss5-bridge.addon64 is left in "
-                    "the folder, then install again.")
+                    "manifest never recorded. "
+                    + ("The bridge here is an older build, "
+                       "dlss5-dx11-bridge.addon64 - install again and it is "
+                       "moved aside (uninstall puts it back)."
+                       if old_bridge else
+                       "Uninstall, check no dlss5-feed.addon64, "
+                       "dlss5-bridge.addon64 or dlss5-dx11-bridge.addon64 is "
+                       "left in the folder, then install again."))
 
-        if d3d9_only and str(man.get("api") or "").upper() in ("DX11", "DX12"):
+        # A DirectX 9 install runs the game through DXVK's d3d9.dll with
+        # ReShade as a Vulkan layer. ReShade saying it was loaded from a
+        # d3d9.dll means its own copy sits first in the search order - the
+        # exe's folder beats bin\ on a Source game - so DXVK never runs and
+        # the feed meets ReShade's DirectX 9 backend (#348, Dark Messiah).
+        # DXVK is recorded on the install ("dxvk": its version), and the
+        # record's api is then "Vulkan" - the game as the install saw it.
+        # ".*?" up to "' into": a game folder may hold an apostrophe
+        # ("Assassin's Creed"), and "[^']*" never matched one.
+        rs_d3d9 = re.search(r"loaded from '(.*?\\d3d9\.dll)' into", rtext or "", re.I)
+        via_dxvk = bool(man.get("dxvk")) and str(man.get("path") or "") in (
+            "feeder", "native", "bridge")
+        if d3d9_only and rs_d3d9 and via_dxvk:
+            # The loaded copy's path under the install folder, against the
+            # record: bin\d3d9.dll recorded as "bin/d3d9.dll" is ours.
+            loaded_at = rs_d3d9.group(1).replace("\\", "/").lower()
+            base_at = str(install_dir).replace("\\", "/").lower().rstrip("/") + "/"
+            rel_at = loaded_at[len(base_at):] if loaded_at.startswith(base_at) else ""
+            mine = bool(rel_at) and any(str(f).replace("\\", "/").lower() == rel_at
+                                        for f in (man.get("files") or []))
+            rep.add(BAD, "ReShade is loading as d3d9.dll, in front of DXVK.",
+                    f"ReShade logged that it was loaded from {rs_d3d9.group(1)}. "
+                    f"On a DirectX 9 install DXVK is the game's d3d9.dll and "
+                    f"ReShade runs as a Vulkan layer; with ReShade's own "
+                    f"d3d9.dll found first the game draws with Direct3D 9, and "
+                    f"the feed cannot run on that. "
+                    + ("This install's record lists that file - press "
+                       "uninstall, then install again. "
+                       if mine else
+                       "This install did not write that file. Move it out of "
+                       "the folder (keep a copy if another mod needs it), then "
+                       "install again with 'graphics api' set to DirectX 9. "))
+            rs_verdict = rep.verdict = (
+                "ReShade loaded as the game's d3d9.dll in front of DXVK, so "
+                "the game stays on DirectX 9 - take that d3d9.dll out and "
+                "install again.")
+        elif d3d9_only and str(man.get("api") or "").upper() in ("DX11", "DX12"):
+            # The same shape as the one above: nothing after this can work,
+            # so the chain below must not bury it under "Inconclusive"
+            # (#479, Life is Strange: 32-bit UE3 set up as DX11).
+            rs_verdict = (
+                "ReShade found a Direct3D 9 device, not the D3D11/12 this "
+                "install set up - the player is on its Direct3D 9 renderer; in "
+                "MPC-HC's options (Playback > Output) choose MPC Video "
+                "Renderer, then play again."
+                if man.get("kind") == "video" else
+                "ReShade found a Direct3D 9 device, not the D3D11/12 this "
+                "install set up - set 'graphics api' to DirectX 9 and install "
+                "again.")
             rep.add(WARN, "ReShade attached to a Direct3D 9 device, not DXGI.",
                     "The app renders with D3D9 here (a video player on the EVR "
                     "renderer, or a game that links D3D11 but draws with "
@@ -809,7 +887,11 @@ def _analyse(install_dir: Path, last_error: str, foreign: list) -> Report:
         # has no swap-chain line of either kind, and Octowow (#156) - running,
         # frames delivered at 3440x1440 - was told it closed before it drew
         # anything, above the finding that said frames were processed.
-        drew = bool(re.search(r"frame \d+ (?:delivered|evaluated)", text or ""))
+        # The 32-bit feed's own spellings count too: "first frame fed" and
+        # its "600 frames: feed CPU" line are frames drawn and shipped (#482
+        # was told it closed before drawing, beside 1200 frames fed).
+        drew = bool(re.search(r"frame \d+ (?:delivered|evaluated)|first frame fed"
+                              r"|\d+ frames: feed CPU", text or ""))
         if "Registered add-on" in rtext and "Exiting" in rtext \
                 and "CreateSwapChain" not in rtext and "Presenting" not in rtext \
                 and "vkCreateSwapchainKHR" not in rtext \
@@ -1435,7 +1517,10 @@ def _analyse(install_dir: Path, last_error: str, foreign: list) -> Report:
         # and the findings above have already given it.
         # Frames shipped to the 64-bit helper prove a runtime existed, so
         # that answer is read first (#252).
-        if _fed_the_helper(rep, text):
+        # Whether the helper's log is from this launch is read off the logs'
+        # own clocks inside _fed_the_helper, not the files' times: the feed
+        # log keeps growing while the person plays on (gate 2.0.6).
+        if _fed_the_helper(rep, text, htext):
             pass
         elif _attached(text) \
                 and not _FEED_GOT_RUNTIME.search(text or "") \
@@ -1457,4 +1542,6 @@ def _analyse(install_dir: Path, last_error: str, foreign: list) -> Report:
         else:
             rep.verdict = "Inconclusive - the feed did not get far enough to tell."
 
+    if rs_verdict and not rep.verdict.startswith("Working"):
+        rep.verdict = rs_verdict
     return rep

@@ -22,17 +22,19 @@ def prepare(entry, options, inspection):
     if options.path not in offered:
         raise ValueError("当前路线不可用。 / The selected route is unavailable.")
     data = community.fetch()
-    routes = autopilot.plan(options.path, offered, data=data, game=game)
+    klass = community.game_class(game.api, inspection.support.native_dlss, inspection.support.upscaler)
+    routes = autopilot.plan(options.path, offered, data=data, game=game, klass=klass)
     choices = {}
     for route in routes:
         choices[route] = replace(options, path=route,
             fg=options.fg and route == dlss.OPTI and game.api == "DX12",
             mfg=options.mfg and inspection.mfg_available and route not in (dlss.OPTI, dlss.REMIX),
+            own_fg=options.own_fg if route == dlss.OPTI and game.api == "DX12" else "",
             vr=False, remix_swap=options.remix_swap and route == dlss.REMIX,
             renodx=options.renodx if (route == dlss.RENODX) == (options.path == dlss.RENODX) else None,
             renodx_local=options.renodx_local if (route == dlss.RENODX) == (options.path == dlss.RENODX) else None)
     allowed, note = autopilot.may_start(game)
-    reasons = [f"{route}: {why}" for route, why in autopilot.plan_reasons(routes, data, game) if why]
+    reasons = [f"{route}: {why}" for route, why in autopilot.plan_reasons(routes, data, game, klass=klass) if why]
     if reasons:
         note += "\n\n社区排序依据 / Community ranking:\n" + "\n".join(reasons)
     return routes, choices, (allowed, note)

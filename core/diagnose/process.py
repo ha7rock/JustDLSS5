@@ -214,7 +214,13 @@ def _name_foreign_hooks(rep: Report, foreign) -> Report:
                                                       "Another DLSS tool's add-on")):
                 f.level = WARN
         return rep
-    if rep.verdict.startswith(_CANNOT_SEE):
+    if rep.verdict.startswith(_CANNOT_SEE) and all("DX11 Bridge" in n for n in foreign):
+        # The bridge route's own add-on under its 1.0.x name: every ReShade
+        # route now moves it aside on install, so that is the step (#439).
+        rep.verdict = (f"An older bridge add-on was loaded beside ours ({names}, "
+                       f"dlss5-dx11-bridge.addon64) - install again and it is "
+                       f"moved aside.")
+    elif rep.verdict.startswith(_CANNOT_SEE):
         rep.verdict = (f"Another DLSS hook was loaded beside ours ({names}) - "
                        f"move it out of the game folder and test with ours "
                        f"alone.")

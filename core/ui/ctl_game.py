@@ -23,9 +23,10 @@ import webbrowser
 from pathlib import Path
 
 from .. import (anticheat, autopilot, autotune, community, components, diagnose, dlss, dxvk,
-                feedcfg, games, gpu, installer, log, net, optiscaler, pe, prefs, profiles,
+                feedcfg, games, gpu, gpupref, installer, log, net, optiscaler, pe, prefs, profiles,
                 reengine, reshade_ini, sources, update, video, watch, wincrash)
 from .. import mfg as _mfg
+from .. import ownfg
 from .ctl_library import first_line
 
 AUTO = "auto"
@@ -292,8 +293,8 @@ class GameControl:
             "provider": 3, "renodx": AUTO, "dlssnr": AUTO, "dlss": AUTO, "dlssd": DLSSD_KEEP,
             "keep_dlss": True, "workres": 100, "preset": 0, "hdr": -1, "nr_preset": 0,
             "nr_style": 0, "fg": False, "feeder": "stable", "opti_build": "",
-            "dxvk": False, "mfg": False, "vr": False, "remix_swap": swapped,
-            "opti_proxy": "", "reshade_proxy": "",
+            "dxvk": False, "mfg": False, "vr": False, "remix_swap": swapped, "gpu_pref": True,
+            "opti_proxy": "", "reshade_proxy": "", "own_fg": "",
         }
 
     def _defaults(self) -> dict:
@@ -329,7 +330,8 @@ class GameControl:
         def work():
             try:
                 drv = gpu.driver_version()
-                sup = dlss.detect(g.install_dir, g.folder, g.api, g.bitness or 0, sm, driver=drv)
+                sup = dlss.detect(g.install_dir, g.folder, g.api, g.bitness or 0, sm, driver=drv,
+                                  shared=community.cached(), exe=g.exe)
                 fit = {o: dlss.fit(o, g.api, sup.native_dlss, sm, upscaler=getattr(sup, "upscaler", ""))
                        for o in sup.options}
                 ac = anticheat.detect(g.install_dir, g.folder)
@@ -365,6 +367,10 @@ class GameControl:
             out["renodx_local"] = {sf: prefs.find_renodx(sf=sf)[0] for sf in (False, True)}
         except Exception:
             out["renodx_local"] = {}
+        try:
+            out["own_fg"] = ownfg.available()
+        except Exception:
+            out["own_fg"] = []
         try:
             out["dlss_beside"] = (Path(g.install_dir) / "nvngx_dlss.dll").is_file()
         except OSError:
@@ -405,7 +411,9 @@ class GameControl:
                        f"the game's own dlss. if this game does have dlss, use 'report a bug' under help "
                        f"and say where the nvngx_dlss.dll is.", "warn")
         if self._why_full:
-            self.write(f"> {first_sentence(self._why_full)}")
+            # Moved by shared results: the whole reason, or the counts it
+            # rests on are cut off at the first sentence (gate 2.0.6).
+            self.write(f"> {self._why_full if getattr(sup, 'shared_from', '') else first_sentence(self._why_full)}")
         if tier:
             self.write(f"> {first_sentence(tier)}")
         self._gpu_note()
@@ -545,6 +553,8 @@ class GameControl:
             s["vr"] = False
         if not self.shown_setting("remix_swap"):
             s["remix_swap"] = False
+        if not self.shown_setting("own_fg"):
+            s["own_fg"] = ""
         if not self.shown_setting("dlssd"):
             s["dlssd"] = DLSSD_KEEP
         if self.work_applies():
@@ -663,6 +673,9 @@ class GameControl:
             "fg": lambda: opti and api == "DX12",
             "feeder": lambda: feeder,
             "opti_build": lambda: opti,
+            # the person's own frame generation files go in with OptiScaler,
+            # and only a D3D12 game has DLSS frame generation to act on
+            "own_fg": lambda: bool(g) and opti and api == "DX12",
             # api == DX11, or a game known to close itself on a ReShade DLL
             # whose API somebody has set by hand: hiding the row then forced
             # the box off (apply_route below), and the one game that must have
@@ -673,6 +686,8 @@ class GameControl:
             "overlay_key": lambda: bool(g) and not remix,
             "vr": lambda: bool(g) and reshade_routes and (g.bitness or 64) == 64,
             "remix_swap": lambda: bool(g) and remix,
+            # only where Windows has two GPUs to choose between (#427)
+            "gpu_pref": lambda: bool(g) and gpupref.hybrid(),
         }
         rule = rules.get(key)
         return bool(rule()) if rule is not None else False
@@ -908,6 +923,14 @@ class GameControl:
                 (t, t + ("  (pre-release)" if pre or "beta" in t.lower() else "")) for t, pre in self.feeder_tags]
         if key == "opti_build":
             return [(k, v.split("  -  ")[0]) for k, v in optiscaler.BUILDS.items()]
+        if key == "own_fg":
+            # read on entry and after 'add your own...': the stored sets
+            have = list((getattr(self, "entry", {}) or {}).get("own_fg") or [])
+            cur = self.settings.get("own_fg") or ""
+            if cur and cur not in have:
+                have.append(cur)          # on the install record, kept in place
+            return [("", "none")] + [(k, f"{ownfg.label(k)}  -  your files") for k in have
+                                     if k in ownfg.RECIPES]
         if key == "overlay_key":
             return [(k, k) for k in reshade_ini.OVERLAY_KEYS]
         return []
@@ -997,11 +1020,13 @@ class GameControl:
                 mfg=bool(s["mfg"]) and vis("mfg") and not other,
                 vr=bool(s["vr"]) and vis("vr") and not other,
                 remix_swap=bool(s["remix_swap"]) and route == dlss.REMIX,
+                gpu_pref=bool(s.get("gpu_pref", True)),
                 path=route,
                 native_dlss=bool(self.support and self.support.native_dlss),
                 upscaler=str(getattr(self.support, "upscaler", "") or ""),
                 opti_proxy=s["opti_proxy"] if route == dlss.OPTI else "",
                 opti_build=s["opti_build"] if route == dlss.OPTI else "",
+                own_fg=(s.get("own_fg") or "") if route == dlss.OPTI and vis("own_fg") and not other else "",
                 reshade_proxy=s["reshade_proxy"] if vis("reshade_proxy") else "",
             )
         finally:
@@ -1172,7 +1197,13 @@ class GameControl:
         text = str(text)
         self.write(text, "err")
         self.shell.status("failed" if here else f"{g.name}: failed")
-        last = text.strip().splitlines()[-1] if text.strip() else "it stopped"
+        # A traceback's last line is the error; a refusal is the whole text -
+        # its last line alone was "That file was not written..." without the
+        # sentence that named the file.
+        if "Traceback" in text:
+            last = text.strip().splitlines()[-1]
+        else:
+            last = " ".join(text.split()) or "it stopped"
         if here:
             self.result = {"kind": "failed", "title": "it stopped", "detail": last}
         if "Traceback" in text:
@@ -1190,7 +1221,7 @@ class GameControl:
             return
         opt = self.opts()
         offer = list(self.support.options or [self.route])
-        planned = autopilot.plan(self.route or opt.path, offer, self._community, g)
+        planned = autopilot.plan(self.route or opt.path, offer, self._community, g, klass=self.game_class())
         if routes:
             routes = [r for r in routes if r in offer] or planned
         else:
@@ -1231,7 +1262,7 @@ class GameControl:
         self.write(f"=== {g.name}: autopilot ({', '.join(routes)}) ===", "head")
         # why that order, when other people's results put it there
         try:
-            for name, why in autopilot.plan_reasons(routes, self._community, g):
+            for name, why in autopilot.plan_reasons(routes, self._community, g, klass=self.game_class()):
                 if why:
                     self.write(f"> {name}: {why}")
         except Exception:
@@ -1505,6 +1536,40 @@ class GameControl:
         self.write(f"> dlss5 add-on: your own file {Path(p).name}", "ok")
         self.refresh("game", soft=True)
 
+    def pick_own_fg(self) -> None:
+        """'add your own...' beside 'frame generation files' (#370): the
+        files the person downloaded, identified, copied into the tool's own
+        folder, and chosen for the next install."""
+        from tkinter import filedialog
+        ps = filedialog.askopenfilenames(
+            title="select the frame generation files you downloaded (version.dll, and dlssg_sm86.ini "
+                  "for dlssg_for_sm86)", parent=self.root,
+            filetypes=[("dll and ini", "*.dll *.ini"), ("all files", "*.*")])
+        if not ps:
+            return
+        try:
+            key, files = ownfg.identify([Path(p) for p in ps])
+            ownfg.store(key, files)
+        except ownfg.OwnFgError as e:
+            self.write(f"[fail] frame generation files: {e}", "err")
+            return
+        except OSError as e:
+            self.write(f"[fail] frame generation files: could not copy them ({e})", "err")
+            return
+        if isinstance(getattr(self, "entry", None), dict):
+            have = list(self.entry.get("own_fg") or [])
+            if key not in have:
+                have.append(key)
+            self.entry["own_fg"] = have
+        self.settings["own_fg"] = key
+        self.write(f"> frame generation files: {ownfg.label(key)} - "
+                   f"{', '.join(ownfg.dests(key))} go in with the next install", "ok")
+        self.write(f"  {ownfg.UNTRIED}", "warn")
+        sm = self._sm()
+        if key == "sm86" and sm and sm >= 89:
+            self.write("  this card runs DLSS frame generation itself - dlssg_for_sm86 is for RTX 30", "warn")
+        self.refresh("game", soft=True)
+
     # ---------------------------------------------------------------- profiles
     def profile_names(self) -> list[str]:
         try:
@@ -1586,7 +1651,8 @@ class GameControl:
                 (getattr(self, "entry", {}) or {}).get("dxvk"))
         if vis("keep_dlss"):
             s["keep_dlss"] = bool(opt.keep_game_dlss)
-        for key, value in (("fg", opt.fg), ("mfg", opt.mfg), ("vr", opt.vr), ("remix_swap", opt.remix_swap)):
+        for key, value in (("fg", opt.fg), ("mfg", opt.mfg), ("vr", opt.vr), ("remix_swap", opt.remix_swap),
+                           ("gpu_pref", opt.gpu_pref)):
             if vis(key):
                 s[key] = bool(value)
         if vis("feeder"):
@@ -1595,6 +1661,8 @@ class GameControl:
                                                                             else "stable")
         if vis("opti_build") and opt.opti_build in optiscaler.BUILDS:
             s["opti_build"] = opt.opti_build
+        if vis("own_fg"):
+            s["own_fg"] = opt.own_fg if opt.own_fg in ownfg.RECIPES else ""
         if vis("opti_proxy"):
             s["opti_proxy"] = opt.opti_proxy if opt.opti_proxy in optiscaler.PROXY_NAMES else ""
         proxy = str(opt.reshade_proxy or "")
@@ -1640,17 +1708,37 @@ class GameControl:
             self.refresh("game", soft=True)
 
     # ---------------------------------------------------------------- notes before the install
+    def game_class(self) -> str:
+        """The class of game the shared tables count this one under, or ""
+        before the page has read the game (community.game_class)."""
+        g, sup = self.game, self.support
+        if g is None or sup is None:
+            return ""
+        return community.game_class(g.api, getattr(sup, "native_dlss", False), getattr(sup, "upscaler", ""))
+
     def community_note(self) -> None:
         g = self.game
         if g is None:
             return
         route, applies = self.route, self.work_applies()
+        klass = self.game_class()
+        offer = list(getattr(self.support, "options", None) or [])
 
         def work():
             try:
                 data = community.fetch()
                 entry = community.for_game(data, g)
-                lines = community.advice(entry, route, gpu.driver_version() or "")
+                drv = gpu.driver_version() or ""
+                lines = community.advice(entry, route, drv)
+                if not lines:
+                    # Nobody (or too few) reported this game: what games
+                    # like it did, as counts. Only where advice() had
+                    # nothing, so a game's own results are never talked
+                    # over by its class.
+                    lines = [x for x in (community.class_line(data, klass, route, offer),) if x]
+                said = community.driver_note(data, drv, route)
+                if said:
+                    lines.append(said)
                 rows = _route_rows(entry)
             except Exception:
                 return
@@ -1788,12 +1876,13 @@ class GameControl:
             return
         tried = str(getattr(rep, "route", "") or self.route or "")
         offer = list(getattr(self.support, "options", None) or [])
+        klass = self.game_class()
 
         def work():
             try:
                 data = community.fetch()
-                lines = [x for x in (community.next_route(data, g, tried, offer),
-                                     community.driver_note(data, gpu.driver_version() or "")) if x]
+                lines = [x for x in (community.next_route(data, g, tried, offer, klass),
+                                     community.driver_note(data, gpu.driver_version() or "", tried)) if x]
             except Exception:
                 return
             if lines:
@@ -2011,7 +2100,7 @@ class GameControl:
             # before anything opens, so a stray Esc here is seen and undone.
             worked = self.shell.ask(
                 "share the result",
-                "The tool cannot see from the logs whether DLSS 5 ran here - you watched the game. "
+                "The logs this report read cannot show whether DLSS 5 ran - you watched the game. "
                 "Did the DLSS 5 picture show in the game?",
                 "it showed", "it did not")
             said_by = "person"
@@ -2027,12 +2116,19 @@ class GameControl:
             man = {}
         rec = community.record(
             g, route or str(man.get("path") or ""), "worked" if worked else "failed",
-            api=str(man.get("api") or getattr(g, "api", "") or ""), build=str(man.get("opti_build") or ""),
+            # The game's own API, not the record's: a DXVK install records
+            # "Vulkan", and its results went into the Vulkan class of games
+            # instead of the DirectX 9 one they belong to (gate 2.0.6).
+            api=str(getattr(g, "api", "") or man.get("api") or ""), build=str(man.get("opti_build") or ""),
             gpu_sm=sm, gpu_name=name or "", driver=gpu.driver_version() or "", version=update.VERSION,
-            measured=self.measured_for(route), said_by=said_by)
+            measured=self.measured_for(route), said_by=said_by,
+            upscaler=self.game_class().partition("/")[2])
         carried = "your card and driver, this tool's version, whether it worked, and the one-line verdict"
+        if rec.get("up"):
+            carried = "whether the game ships DLSS, FSR or XeSS, " + carried
         if rec.get("res"):
-            carried = ("your card and driver, this tool's version, whether it worked, the one-line verdict, and "
+            carried = (("whether the game ships DLSS, FSR or XeSS, " if rec.get("up") else "")
+                       + "your card and driver, this tool's version, whether it worked, the one-line verdict, and "
                        f"what it cost ({rec['res']}% work area"
                        + ((f", {rec['ms']} ms a frame for the model and feed together"
                            if (rec.get("route") or route) == dlss.FEEDER else f", {rec['ms']} ms of model a frame")

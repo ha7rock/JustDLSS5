@@ -103,8 +103,99 @@ def _helper_verdict(rep: Report, htext: str) -> bool:
     return True
 
 
-def _fed_the_helper(rep: Report, text: str) -> bool:
-    """The feed shipped frames to the helper, and its log can see no further."""
+def _clock(stamp: str) -> float | None:
+    """Seconds since midnight from the logs' "01:20:34.841" stamp."""
+    m = re.match(r"(\d\d):(\d\d):(\d\d)[.:](\d{3})", stamp or "")
+    if not m:
+        return None
+    h, mi, s, ms = (int(x) for x in m.groups())
+    return h * 3600 + mi * 60 + s + ms / 1000
+
+
+def _gave_up_early(rep: Report, text: str, htext: str, stale: bool = False) -> bool:
+    """The feed stopped waiting for the helper, and the helper came up after.
+
+    "host lost: pipe never appeared" is the feed's own timeout. On #482 the
+    helper was spawned at 01:20:34.8, the feed gave up at 01:20:49.9, and the
+    helper's NGX_D3D12_Init succeeded at 01:20:52.8 - it was starting, not
+    gone. The answer is the feeder's wait, not the helper's log, which the
+    report already carries.
+    """
+    lost = re.search(r"^(\S+)\s+\[feed32\] host lost: pipe never appeared", text or "", re.M)
+    if not lost:
+        return False
+    gave_up = _clock(lost.group(1))
+    spawn = None
+    for spawn in re.finditer(r"^(\S+)\s+\[feed32\] host spawned", text or "", re.M):
+        pass
+    # Is the helper's log from this launch? Its first stamp has to fall
+    # between the spawn and two minutes after the feed gave up - read off
+    # the logs' own clocks, because the feed log keeps growing while the
+    # person plays on and the files' times drift apart (gate 2.0.6).
+    first = re.search(r"^(\S+)\s+\[host\]", htext or "", re.M)
+    t0 = _clock(first.group(1)) if first else None
+    lo = _clock(spawn.group(1)) if spawn else gave_up
+    if t0 is not None and lo is not None and gave_up is not None:
+        if t0 < lo - 43200:
+            t0 += 86400                    # past midnight
+        if not (lo - 10 <= t0 <= gave_up + 120):
+            stale, htext = True, ""
+    both = (htext or "") + "\n" + (text or "")
+    ready = None
+    for m in re.finditer(r"^(\S+)\s+\[host\] NVSDK_NGX_D3D12_Init -> 0x0*1 \(Success\)",
+                         both, re.M):
+        t = _clock(m.group(1))
+        if t is None or gave_up is None:
+            continue
+        if t < gave_up - 43200:
+            t += 86400                     # past midnight
+        # Within two minutes of giving up: anything later is another start.
+        if gave_up <= t <= gave_up + 120:
+            ready = t
+            break
+    started = _clock(spawn.group(1)) if spawn else None
+    waited = (f" {gave_up - started:.0f} s after starting it"
+              if started is not None and gave_up is not None and gave_up >= started else "")
+    if ready is not None:
+        took = (f", {ready - started:.0f} s after it was started"
+                if started is not None and ready >= started else "")
+        rep.add(BAD, f"The feed stopped waiting for the 64-bit helper{waited}, "
+                     f"and the helper finished starting later{took}.",
+                "The helper's own log shows NVIDIA's runtime coming up after the "
+                "feed had already given up on it ('host lost: pipe never "
+                "appeared'), so the game carried on without the pass. That "
+                "wait is inside DLSS5-Feeder, not in this install. Start the "
+                "game again, and if it keeps happening, try another "
+                "build in 'feeder build' and send both logs to the "
+                "DLSS5-Feeder project.")
+        rep.verdict = ("The feed stopped waiting for the 64-bit helper while it "
+                       "was still starting - a feeder timing bug; start the game "
+                       "again or try another feeder build.")
+        return True
+    rep.add(BAD, f"The feed stopped waiting for the 64-bit helper{waited} "
+                 f"('host lost: pipe never appeared').",
+            "The helper was started and never opened its connection in time, "
+            "so the game carried on without the pass. "
+            + ("Its own log, host64\\dlss5-feed-host.log, is from an earlier "
+               "launch: the helper wrote nothing this time, which points at "
+               "something stopping it from starting at all."
+               if stale else
+               "Its own log, host64\\dlss5-feed-host.log, says how far it got."
+               if not htext else
+               "Its own log shows no NVIDIA runtime coming up after the feed "
+               "gave up."))
+    rep.verdict = ("The feed stopped waiting for the 64-bit helper before it "
+                   "started - see below.")
+    return True
+
+
+def _fed_the_helper(rep: Report, text: str, htext: str = "",
+                    stale: bool = False) -> bool:
+    """The feed shipped frames to the helper, and its log can see no further.
+
+    `stale`: the helper's log is there but from an earlier launch."""
+    if _gave_up_early(rep, text, htext, stale):
+        return True
     perf = None
     for perf in re.finditer(r"\[feed32\] (\d+) frames: feed CPU [\d.]+ ms/frame"
                             r"[^\n]*?\(([\d.]+) fps\)[^\n]*pipe write", text or ""):
