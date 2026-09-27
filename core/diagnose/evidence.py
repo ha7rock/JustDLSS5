@@ -27,6 +27,7 @@ __all__ = [
     "_dxvk_gone", "_engine_says_not_dxgi", "_family", "_fault_chain",
     "_feed_shaders", "_fresh", "_game_ran", "_in",
     "_install_crash", "_installed_at", "_last_feed_session", "_last_session",
+    "_NET_VERDICTS", "_exc_line", "_net_cause", "_net_stop",
     "_launcher_installed", "_layer_gone", "_live_evidence", "_loaded_block",
     "_manifest", "_manifest_file", "_missing_addons",
     "_missing_core", "_near", "_nrpre_picks", "_opti_log", "_remembered_evidence",
@@ -687,6 +688,17 @@ def _anything_of_ours(install_dir: Path) -> str:
     return ""
 
 
+def _exc_line(text: str) -> str:
+    """The exception line of a traceback: the frames are indented and the
+    message is not, so it is the last unindented line."""
+    for ln in reversed((text or "").strip().splitlines()):
+        ln = ln.strip()
+        if ln and not ln.startswith(("File ", "Traceback", "During handling",
+                                     "The above exception")):
+            return ln
+    return ""
+
+
 def _install_crash(last_error: str) -> tuple[str, str]:
     """(why, the exception line) from the traceback the install left behind.
 
@@ -707,15 +719,7 @@ def _install_crash(last_error: str) -> tuple[str, str]:
               if d.lower() not in ("ui", "gui")]
     if not any(f in _install_modules() for f in frames):
         return "", ""
-    line = ""
-    for ln in reversed(text.strip().splitlines()):
-        ln = ln.strip()
-        # The frames are indented and the message is not; the last
-        # unindented line of a traceback is the exception itself.
-        if ln and not ln.startswith(("File ", "Traceback", "During handling",
-                                     "The above exception")):
-            line = ln
-            break
+    line = _exc_line(text)
     low = line.lower()
     for key, why in _CRASH_CAUSES:
         if key in low:
@@ -733,13 +737,59 @@ def _crash_verdict(rep: "Report", last_error: str) -> bool:
     why, line = _install_crash(last_error)
     if not why:
         return False
-    rep.add(BAD, "The install stopped with an error before it wrote anything.",
-            f"Nothing was installed into this folder: {why}. It said: "
+    kind, what, todo = _net_cause(last_error)
+    # Not "before it wrote anything": since 2.0.6 a failed fresh install is
+    # also taken back out (installer._roll_back).
+    rep.add(BAD, "The install stopped with an error, and nothing of it is "
+                 "in this folder.",
+            f"Nothing is installed here: {what or why}. It said: "
             f"{line} - so there is nothing here for the game to load, and "
-            f"nothing to clean up. Install again.")
-    rep.verdict = "The install crashed before it finished - install again."
+            f"nothing to clean up. " + (todo or "Install again."))
+    rep.verdict = _NET_VERDICTS.get(
+        kind, "The install crashed before it finished - install again.")
     rep.ran = False
     return True
+
+
+# By net.net_kind(); each starts with the stage-1 fragment "The install
+# stopped", and none is "install again" alone (#434, #438).
+_NET_VERDICTS = {
+    "blocked": ("The install stopped: Windows blocked the download - allow "
+                "this tool through the firewall, then install again."),
+    "cut": ("The install stopped: the download kept being cut off - try "
+            "another network or turn off the VPN/proxy, then install again."),
+    "dns": ("The install stopped: this PC could not look up the download "
+            "server - check the connection, then install again."),
+    "refused": ("The install stopped: the download server could not be "
+                "reached - try another network, then install again."),
+    "timeout": ("The install stopped: the download server did not answer in "
+                "time - try again later or from another network."),
+}
+
+
+def _net_cause(last_error: str) -> tuple[str, str, str]:
+    """(net kind, what happened, what to do) for an install traceback that
+    ends in a connection fault with a name, else ("", "", ""). A 2.0.3
+    "[WinError 10013]" reads as 2.0.6's Unreachable line does; only the
+    newer one names the host."""
+    from .. import net as _net
+    line = _exc_line(last_error) if _install_crash(last_error)[0] else ""
+    kind = _net.net_kind(line) if line else ""
+    m = re.search(r"Unreachable: ([\w.-]+):", line)
+    return (kind, *_net.net_explain(kind, m.group(1) if m else "")) \
+        if kind else ("", "", "")
+
+
+def _net_stop(rep: "Report", last_error: str) -> bool:
+    """An unfinished install whose own traceback (installer.last_failure,
+    this folder's only) names the connection fault: "install again" cannot
+    help a socket Windows refuses (#434)."""
+    kind, what, todo = _net_cause(last_error)
+    if kind:
+        rep.add(BAD, "The install did not finish: the download could not "
+                     "get through.", f"{what[:1].upper() + what[1:]}. {todo}")
+        rep.verdict = _NET_VERDICTS[kind]
+    return bool(kind)
 
 
 def _route(install_dir: Path) -> str:

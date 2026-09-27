@@ -1,5 +1,7 @@
 """Offline safety and interaction gates for upstream 2.0 desktop tools."""
 import threading
+import tempfile
+from pathlib import Path
 import time
 import unittest
 from types import SimpleNamespace as NS
@@ -94,10 +96,10 @@ class MaintenanceTests(unittest.TestCase):
 
     def test_community_evidence_reaches_plan_and_explanation(self):
         item = entry(); data = {'games': []}
-        inspection = NS(support=NS(options=[dlss.OPTI]), fit={dlss.OPTI:(True, '')}, mfg_available=False)
+        inspection = NS(support=NS(native_dlss=False, upscaler="", options=[dlss.OPTI]), fit={dlss.OPTI:(True, '')}, mfg_available=False)
         with patch.object(installer, 'check_supported', return_value=(True, '')), patch.object(pilot.anticheat, 'detect', return_value=NS(present=False)), patch.object(pilot.community, 'fetch', return_value=data), patch.object(pilot.autopilot, 'plan', return_value=[dlss.OPTI]) as plan, patch.object(pilot.autopilot, 'plan_reasons', return_value=[(dlss.OPTI, '2 of 3 in this game')]), patch.object(pilot.autopilot, 'may_start', return_value=(True, '')):
             result = pilot.prepare(item, installer.Options(path=dlss.OPTI), inspection)
-        plan.assert_called_once_with(dlss.OPTI, [dlss.OPTI], data=data, game=item.game)
+        plan.assert_called_once_with(dlss.OPTI, [dlss.OPTI], data=data, game=item.game, klass=pilot.community.game_class(item.game.api, False, ""))
         self.assertIn('2 of 3', result[2][1])
 
 class WatcherTests(unittest.TestCase):
@@ -214,6 +216,46 @@ class Upstream205Tests(unittest.TestCase):
             with self.assertRaises(OSError):
                 child.popen(['fixture.exe'])
         self.assertEqual([call.args for call in directory.call_args_list], [(None,), ('fixture-runtime',)])
+
+
+class Upstream206Tests(unittest.TestCase):
+    def test_gpu_preference_preserves_user_values_and_restores_only_ours(self):
+        from core import gpupref
+        memory = gpupref.Memory()
+        memory.set("game.exe", "AutoHDREnable=1;")
+        memory.set("chosen.exe", "GpuPreference=1;")
+        with patch.object(gpupref, "backend", memory):
+            records, theirs = gpupref.apply(["game.exe", "chosen.exe"])
+            self.assertEqual(theirs, ["chosen.exe"])
+            self.assertEqual(gpupref.chosen("game.exe"), "2")
+            gpupref.restore(records)
+            self.assertEqual(memory.get("game.exe"), "AutoHDREnable=1;")
+            records, _ = gpupref.apply(["game.exe"])
+            memory.set("game.exe", "GpuPreference=1;AutoHDREnable=1;")
+            self.assertEqual(gpupref.restore(records), [])
+            self.assertEqual(gpupref.chosen("game.exe"), "1")
+
+    def test_failed_fresh_install_rolls_back_but_reinstall_does_not(self):
+        from core import installer
+        with tempfile.TemporaryDirectory() as temp:
+            folder = Path(temp)
+            game = entry().game
+            manifest = folder / installer.MANIFEST
+            manifest.write_text("{}")
+            report = installer.Report(written=["partial.dll"])
+            with patch.object(installer, "uninstall", side_effect=lambda *a, **k: manifest.unlink()) as undo:
+                installer._roll_back(game, folder, report, False, lambda text: None)
+                undo.assert_not_called()
+                installer._roll_back(game, folder, report, True, lambda text: None)
+                undo.assert_called_once()
+
+    def test_local_frame_generation_rejects_non_dll_without_installing(self):
+        from core import ownfg
+        with tempfile.TemporaryDirectory() as temp:
+            fake = Path(temp) / "version.dll"
+            fake.write_bytes(b"not a Windows binary")
+            with self.assertRaises(ownfg.OwnFgError):
+                ownfg.identify([fake])
 
 if __name__ == '__main__':
     unittest.main()

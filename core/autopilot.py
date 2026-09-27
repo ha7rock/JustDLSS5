@@ -95,7 +95,7 @@ class Outcome:
 
 
 def plan(first: str, offer: list[str], data: dict | None = None,
-         game=None, limit: int = MAX_ATTEMPTS) -> list[str]:
+         game=None, limit: int = MAX_ATTEMPTS, klass: str = "") -> list[str]:
     """The routes to try, in order, starting with the recommended one.
 
     Only routes this game is actually offered: naming one that is not in the
@@ -109,13 +109,14 @@ def plan(first: str, offer: list[str], data: dict | None = None,
         try:
             # every remaining route in the order the shared results put them
             # in, not just one promoted by matching a sentence
-            rest = [n for n, _why in community.rank_routes(data, game, rest)]
+            rest = [n for n, _why in community.rank_routes(data, game, rest, klass)]
         except Exception:
             pass
     return (out + rest)[:max(1, limit)]
 
 
-def plan_reasons(offer: list[str], data: dict | None, game=None) -> list[tuple[str, str]]:
+def plan_reasons(offer: list[str], data: dict | None, game=None,
+                 klass: str = "") -> list[tuple[str, str]]:
     """(route, why it is in that place) for a plan, for the log to print.
 
     A pass that reorders itself has to say what reordered it, or the person
@@ -124,7 +125,7 @@ def plan_reasons(offer: list[str], data: dict | None, game=None) -> list[tuple[s
     if data is None or game is None:
         return [(n, "") for n in offer]
     try:
-        said = dict(community.rank_routes(data, game, offer))
+        said = dict(community.rank_routes(data, game, offer, klass))
     except Exception:
         said = {}
     return [(n, said.get(n, "")) for n in offer]
@@ -444,7 +445,12 @@ def run(game, opt, routes: list[str], hooks: Hooks | None = None) -> Outcome:
                           if a.installed), "")
     try:
         man = installer._previous_manifest(Path(game.install_dir)) or {}
-        out.left = str(man.get("path") or "") or out.installed
+        # A failed fresh install is taken back out and may leave a record
+        # holding only its reason (2.0.6): that route is not an install in
+        # the folder.
+        rolled = installer.net.ROLLED_BACK_NOTE in (man.get("notes") or [])
+        out.left = ("" if rolled else str(man.get("path") or "")) \
+            or out.installed
     except Exception:
         out.left = out.installed
     return out

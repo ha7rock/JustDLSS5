@@ -8,6 +8,17 @@ import re
 
 
 _MESSAGES = r"""
+DLSS was called, and no neural frame followed - play a minute in the game and check again.|游戏已调用 DLSS，但尚未记录到神经渲染帧。请游玩一分钟后再检查。
+ReShade is loading as d3d9.dll, in front of DXVK.|ReShade 以 d3d9.dll 提前加载，挡住了 DXVK。
+ReShade loaded as the game's d3d9.dll in front of DXVK, so the game stays on DirectX 9 - take that d3d9.dll out and install again.|ReShade 的 d3d9.dll 在 DXVK 前加载，游戏仍运行于 DirectX 9。请移除此 d3d9.dll 后重新安装。
+Switched on and hooked, but the game made no D3D12 DLSS call.|组件已启用并挂接，但游戏没有调用 D3D12 DLSS。
+The feed stopped waiting for the 64-bit helper before it started - see below.|64 位辅助程序启动前，Feeder 已停止等待。详情见下方。
+The feed stopped waiting for the 64-bit helper while it was still starting - a feeder timing bug; start the game again or try another feeder build.|64 位辅助程序仍在启动时，Feeder 已停止等待。这是 Feeder 的等待时序问题，请重启游戏或尝试其他 Feeder 版本。
+The game called DLSS, and the add-on logged no frame after that.|游戏调用了 DLSS，但插件此后没有记录到渲染帧。
+The game made no D3D12 DLSS call - turn DLSS on in the game's own settings, or use the optiscaler route.|游戏没有调用 D3D12 DLSS。请在游戏设置中启用 DLSS，或使用 OptiScaler 路线。
+The install did not finish: the download could not get through.|安装未完成：下载连接失败。
+The install stopped with an error, and nothing of it is in this folder.|安装因错误停止，本次安装的文件已从此目录移除。
+Windows recorded the game faulting - see below for what to take out first.|Windows 记录了游戏崩溃，请按下方建议依次排除组件。
 You said the game closed itself.|你反馈游戏自行退出，请按以下顺序排查。
 You said the game never started.|你反馈游戏未能启动，请按以下顺序排查。
 Neural rendering ran, then the game closed itself - see below for what to take out first.|神经渲染曾运行，但游戏随后自行退出。请按下方建议排查并还原组件。

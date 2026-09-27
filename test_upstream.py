@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from core import games, library, feedcfg, optiscaler, installer, net, pe, video, diagnose
+from core import games, library, feedcfg, optiscaler, installer, net, pe, video, diagnose, prefs
 from frontend.service import BackendService, LibraryEntry
 
 
@@ -49,7 +49,8 @@ class UpstreamTests(unittest.TestCase):
         self.exe = self.folder / "game.exe"
         self.exe.write_bytes(b"fixture")
         self.game = games.Game(name="Fixture", folder=self.folder, exe=self.exe, api="DX11", bitness=64)
-        for mock in (patch.object(library, "FILE", self.root / "library.json"),
+        for mock in (patch.object(prefs, "FILE", self.root / "settings.json"),
+                     patch.object(library, "FILE", self.root / "library.json"),
                      patch.object(games, "api_override", return_value=""),
                      patch("urllib.request.urlopen", side_effect=AssertionError("Unexpected network"))):
             mock.start()
@@ -59,6 +60,14 @@ class UpstreamTests(unittest.TestCase):
         decorate = patch.object(self.service, "decorate", side_effect=lambda game: LibraryEntry(game, bool(game.installed)))
         decorate.start()
         self.addCleanup(decorate.stop)
+
+    def test_manual_game_survives_full_scan_but_deleted_executable_does_not(self):
+        with patch.object(games, "manual", return_value=self.game), patch.object(games, "scan_all", return_value=[]), patch.object(video, "known", return_value=None):
+            self.service.manual(self.folder)
+            self.assertEqual(prefs.get("manual_folders"), [str(self.folder)])
+            self.assertEqual(len(self.service.scan(lambda *args: None, full=True)), 1)
+            self.exe.unlink()
+            self.assertEqual(self.service.scan(lambda *args: None, full=True), [])
 
     def test_rescan_is_incremental_but_explicit_full_scan_is_not(self):
         with patch.object(games, "scan_all", return_value=[self.game]) as full, \

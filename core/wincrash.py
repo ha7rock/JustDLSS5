@@ -34,6 +34,16 @@ PROVIDERS = ("Application Error", ".NET Runtime", "Application Hang")
 TIMEOUT = 8
 
 
+def _base(name: str) -> str:
+    """The file name alone, lower case.
+
+    Windows puts a bare module name in some events and the full path in
+    others (#480 GettingUp.exe, #171 GTA5.exe): compared whole, the game's
+    own exe given as a path was "neither the game nor ours".
+    """
+    return (name or "").replace("\\", "/").rsplit("/", 1)[-1].strip().lower()
+
+
 @dataclass
 class Crash:
     when: str
@@ -50,9 +60,8 @@ class Crash:
         loader, REFramework and DXVK - every one of them a file this tool
         wrote - and told the person to close their overlays instead.
         """
-        m = self.module.lower()
-        if m and m in {str(w).replace("\\", "/").rsplit("/", 1)[-1].lower()
-                       for w in written}:
+        m = _base(self.module)
+        if m and m in {_base(str(w)) for w in written}:
             return True
         return ("reshade" in m or "dlss5" in m or "renodx" in m
                 or "optiscaler" in m or m.startswith("nvngx"))
@@ -66,8 +75,7 @@ class Crash:
         pretend otherwise. Only the name this install actually wrote counts:
         a Remix or Vulkan-layer install wrote no proxy at all.
         """
-        m = self.module.lower()
-        return bool(proxy) and m == proxy.lower() and not self.ours()
+        return bool(proxy) and _base(self.module) == _base(proxy) and not self.ours()
 
 
 def _ps(script: str) -> str:
@@ -177,7 +185,7 @@ def describe(c: Crash | None, proxy: str = "",
     if c is None or not c.module:
         return None
     where = f"{c.when} UTC" if c.when else "an unrecorded time"
-    if c.module.lower() == c.exe.lower():
+    if _base(c.module) == _base(c.exe):
         return (f"Windows recorded {c.exe} faulting in its own code "
                 f"({c.code or 'no code'}).",
                 f"The crash was inside the game itself, not in anything this "

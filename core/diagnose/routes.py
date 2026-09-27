@@ -785,19 +785,39 @@ def _analyse_upstream(rep: Report, rtext: str) -> Report:
     # own DLSS call and the game never made one. Sending this person to the
     # overlay to "check it is switched on" asked them to confirm what the
     # log already says (#390: enabled=1, four hooks OK, no frame).
+    # Only while the log has no trace of a call either: a CreateFeature or an
+    # eval line IS the game calling DLSS, and a session that dies in its first
+    # frames after one was told "the game never called DLSS" (gate 2.0.5).
+    if on and on.group(1) == "1" and (created or ev):
+        rep.add(WARN, "The game called DLSS, and the add-on logged no frame "
+                      "after that.",
+                "The add-on "
+                + (("created the neural feature" if int(created.group(1), 16) == 1
+                    else f"asked for the neural feature (res={created.group(1)})")
+                   if created else f"evaluated at {ev.group(1)}")
+                + " and then wrote no heartbeat - the session ended, or the "
+                "game stopped calling DLSS (a menu, a load). Play a minute in "
+                "the game itself and read the report again. If the game "
+                "closed itself at that moment, say so in 'report a bug' (did "
+                "the game start?) and the report names what to take out.")
+        rep.verdict = ("DLSS was called, and no neural frame followed - play "
+                       "a minute in the game and check again.")
+        return rep
+
     if on and on.group(1) == "1":
-        rep.add(BAD, "Switched on and hooked, but the game never called DLSS.",
+        rep.add(BAD, "Switched on and hooked, but the game made no D3D12 "
+                     "DLSS call.",
                 "The add-on's own log says enabled=1 and that it hooked the "
                 "game's D3D12 DLSS call, and nothing came through it: the "
-                "game never ran DLSS. Turn DLSS (DLAA, or any DLSS quality "
+                "game made no D3D12 DLSS call. Turn DLSS (DLAA, or any DLSS quality "
                 "mode) on in the game's own graphics settings and play a "
                 "minute in the game itself - a main menu often runs no DLSS "
                 "at all. If DLSS is already on, the game may draw with "
                 "DirectX 11, where these D3D12 hooks are never reached: "
                 "switch the route to optiscaler, which also works on "
                 "DirectX 11 (DLSS still has to be on in the game).")
-        rep.verdict = ("The game never called DLSS - turn it on in the game's "
-                       "own settings, or use the optiscaler route.")
+        rep.verdict = ("The game made no D3D12 DLSS call - turn DLSS on in the "
+                       "game's own settings, or use the optiscaler route.")
         return rep
 
     rep.add(INFO, "The add-on loaded and set itself up, but never ran.",

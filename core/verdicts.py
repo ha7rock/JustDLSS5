@@ -68,6 +68,8 @@ CHAIN = (
         # (#400, #348, #238), and an engine a DXGI proxy never reaches (#403)
         "runs as administrator, so ReShade's Vulkan layer is skipped",
         "not DXGI - 'full rescan', then install again",
+        # #479: the game drew with D3D9 on an install set up for D3D11/12
+        "ReShade found a Direct3D 9 device, not the D3D11/12",
         "on a renderer this tool cannot reach",
     )),
     ("4 the game refused the hook", "upstream", (
@@ -89,7 +91,8 @@ CHAIN = (
         "Set up correctly, but not switched on yet",
         "Loaded and set up; no neural frame yet",
         # #390: switched on and hooked, and the game made no DLSS call
-        "The game never called DLSS",
+        # ("The game never called DLSS" before 2.0.6 - see RETIRED)
+        "The game made no D3D12 DLSS call",
         "OptiScaler loaded; neural rendering not switched on",
         "The add-ons are loaded and the neural pass is switched off",
         "ReShade never gave it an effect runtime",
@@ -99,16 +102,21 @@ CHAIN = (
         "Add-ons loaded. Confirm in",
         "Add-ons loaded and the switch is on",
         "Frames reach the 64-bit helper, and only its own log",
+        # upstream: a CreateFeature/eval line and no heartbeat after it
+        "DLSS was called, and no neural frame followed",
         # The report's own correction when the person said the game closed
         # itself or never started (diagnose.answered, #412): the logs could
         # not see why, and what to take out first is the answer.
         "Neural rendering ran, then the game closed itself",
         "this time the game never started - see below",
         "The game closed itself and nothing here recorded why",
+        "Windows recorded the game faulting - see below",
         "The game never started with this install in",
     )),
     ("8 the add-on crashed", "upstream", (
         "The feed crashed after starting",
+        # #482: the feeder's own wait for its 64-bit helper ran out
+        "The feed stopped waiting for the 64-bit helper",
         "The crash is in the",
         "The 64-bit helper lost its graphics device",
         "its neural add-on never created the DLSS 5 feature",
@@ -132,6 +140,10 @@ CHAIN = (
     # names; only the replaced "we cannot see" verdicts land here (#250).
     ("11 a second DLSS hook beside ours", "the person", (
         "Another DLSS hook was loaded beside ours",
+        # #439: the bridge route's own add-on under its 1.0.x name
+        "An older bridge add-on was loaded beside ours",
+        # #348: a ReShade d3d9.dll found before DXVK's
+        "ReShade loaded as the game's d3d9.dll in front of DXVK",
     )),
 )
 
@@ -155,9 +167,20 @@ NOT_A_ROUTE = (
     "runs as administrator, so ReShade's Vulkan layer is skipped",
     "not DXGI - 'full rescan', then install again",
     "on a renderer this tool cannot reach",
+    # #479: a D3D9 device on an install set up for D3D11/12 - the next route
+    # goes in with the same wrong API (gate 2.0.6)
+    "ReShade found a Direct3D 9 device, not the D3D11/12",
 )
 
 _SECOND_HOOK = "another dlss hook was loaded beside ours"
+
+
+# Verdicts an older build printed and this one does not. Shared results and
+# reports written by those builds still carry them, so they keep their
+# stage; CHAIN holds only what the tool prints today (the gate checks it).
+RETIRED = (
+    ("6 set up, not switched on", "The game never called DLSS"),     # 2.0.5, #390
+)
 
 
 def stage(verdict: str) -> tuple[str, str]:
@@ -176,6 +199,9 @@ def stage(verdict: str) -> tuple[str, str]:
         for s in starts:
             if s.lower() in low:
                 return name, who
+    for name, s in RETIRED:
+        if s.lower() in low:
+            return name, next(w for n, w, _s in CHAIN if n == name)
     return "unmapped: " + str(verdict)[:40], "?"
 
 
@@ -208,11 +234,17 @@ def why_next(verdict: str, route: str) -> str:
 # that logs no frames (renodx, native, bridge) could never share a success,
 # and #414's "WORKED FINE" went into the list as a failure - 27 of the first
 # 230 shared results were such an unseen outcome filed as failed.
-UNSEEN = ("7 loaded, and we cannot see", "11 a second DLSS hook beside ours")
+# Stage 6 too: "not switched on" / "the game never called DLSS" is what the
+# logs said when the report was read, not what the person saw after they
+# switched it on. #437 (2.0.5, RDR2) filed "never called DLSS" as a failure
+# and its reporter wrote "it appeared to work in game".
+UNSEEN = ("6 set up, not switched on", "7 loaded, and we cannot see",
+          "11 a second DLSS hook beside ours")
 _PERSON_SAID_FAILED = (
     "Neural rendering ran, then the game closed itself",
     "this time the game never started - see below",
     "The game closed itself and nothing here recorded why",
+    "Windows recorded the game faulting - see below",
     "The game never started with this install in",
 )
 

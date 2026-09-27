@@ -85,15 +85,22 @@ def _ours(install_dir: Path) -> set[str]:
         return set()
 
 
-def has_dlssg(game_dir: Path, install_dir: Path | None = None) -> str:
+def has_dlssg(game_dir: Path, install_dir: Path | None = None,
+              written=()) -> str:
     """The frame-generation file the GAME ships, relative to game_dir, or "".
 
     Searched the way the DLSS files are (dlss.find_dlss_files): Unreal keeps
     them under Engine/Plugins/Runtime/Nvidia/DLSS/..., nine levels down from
     the game folder and nowhere near the executable.
+
+    `written` is what an install in progress has put down so far: the
+    record on disk is still the previous one then, and a file this install
+    wrote is not the game's (gate 2.0.5).
     """
     from . import dlss
     ours = _ours(install_dir) if install_dir is not None else set()
+    ours |= {str(f).replace("\\", "/").rsplit("/", 1)[-1].lower()
+             for f in written or () if isinstance(f, str)}
     try:
         hits = dlss.find_dlss_files(Path(game_dir), names=DLSSG_FILES)
     except Exception:

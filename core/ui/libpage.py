@@ -66,11 +66,28 @@ class LibraryPage(Page):
         bw = T.px(132)
         bx = width - pad - bw
         self.scan_btn = k.button(bx, T.px(36), bw, "scan", self.scan_menu, glyph="scan",
-                                 tags=tags, h=T.px(44), tip="rescan, full rescan, choose a folder, update all")
-        fw = min(T.px(360), bx - T.px(12) - pad - T.px(220))
+                                 tags=tags, h=T.px(44), tip="rescan, full rescan, add a game, update all")
+        # a game the scan did not find, beside the scan and not in its menu:
+        # two people asked for a feature that was already behind 'scan'
+        # (#374, #441). Only the icon when the words would cut the search's
+        # own hint. The search starts after the title's own width: a fixed
+        # 220 px for a five-letter word left it 58 px at the window's narrowest.
+        left = pad + T.width("games", T.mono(22, True)) + T.px(32)
+        hint = T.width("search   ctrl+f", T.mono(10)) + T.px(76)
+        aw = T.width("add a game", T.mono(11)) + T.px(62)
+        if bx - T.px(12) - aw - T.px(12) - left < max(T.px(150), hint):
+            aw = T.px(46)
+        ax = bx - T.px(12) - aw
+        self.add_btn = k.button(ax, T.px(36), aw, "add a game" if aw > T.px(46) else "", a.pick_folder,
+                                glyph="add", tags=tags, h=T.px(44),
+                                tip="a game the scan did not find - pick the folder its .exe is in (ctrl+o)")
+        fw = min(T.px(360), ax - T.px(12) - left)
         prev = self.field.get() if self.field else a.query
-        self.field = k.field(bx - T.px(12) - fw, T.px(38), fw, "search   ctrl+f",
+        self.field = k.field(ax - T.px(12) - fw, T.px(38), fw, "search   ctrl+f",
                              on_change=self._typed, on_enter=self._first, tags=tags, value=prev)
+        # the count line under the title stops short of the search box, which
+        # now starts where the title ends
+        self.count_room = ax - T.px(12) - fw - T.px(16) - pad
         self.header_h = T.px(150)
         h = self.refresh(first_draw=True)
         return h
@@ -98,7 +115,8 @@ class LibraryPage(Page):
         # answer) says so where the games are, not only in the closed log
         if a.scan_failed and not a.scanning:
             said.append(a.scan_failed)
-        c.itemconfigure(self.count, text=T.fit("  \u00b7  ".join(said), T.mono(10), width - 2 * pad))
+        c.itemconfigure(self.count, text=T.fit("  \u00b7  ".join(said), T.mono(10),
+                                               min(width - 2 * pad, getattr(self, "count_room", width))))
         # the filter tabs
         y = T.px(124)
         x = pad
@@ -183,8 +201,8 @@ class LibraryPage(Page):
                           font=T.mono(10), fill=T.MUTED, anchor="w", tags=tags)
             k.button(pad, top + T.px(110), T.px(240), "find my games", lambda: a.scan(full=True),
                      glyph="search", kind="primary", tags=tags)
-            k.button(pad + T.px(252), top + T.px(110), T.px(220), "choose a folder", a.pick_folder,
-                     glyph="folder", tags=tags)
+            k.button(pad + T.px(252), top + T.px(110), T.px(220), "add a game", a.pick_folder,
+                     glyph="add", tags=tags)
             y = top + T.px(200)
             for line, colour in (
                     ("works best on 64-bit DirectX 11/12. DirectX 9, OpenGL, Vulkan and 32-bit", T.DIM),
@@ -210,8 +228,8 @@ class LibraryPage(Page):
         # for, and until now the only way in was a dropdown behind 'scan'
         # (#374 - "please add a button that can search for a game").
         if q:
-            k.link(pad, top + T.px(106), "choose a folder  -  add it by hand",
-                   a.pick_folder, glyph="folder", tags=tags,
+            k.link(pad, top + T.px(106), "add a game  -  pick the folder it is in",
+                   a.pick_folder, glyph="add", tags=tags,
                    tip="for a game no store reports - pick the folder its .exe is in")
             return top + T.px(190)
         return top + T.px(160)
@@ -335,7 +353,7 @@ class LibraryPage(Page):
         a = self.app
         items = [("rescan  -  look for new games", lambda: a.scan()),
                  ("full rescan  -  read every game again", lambda: a.scan(full=True)),
-                 ("choose a folder  -  one game by hand", a.pick_folder)]
+                 ("add a game  -  one the scan did not find", a.pick_folder)]
         # the number update all acts on, not the update tab's: a 'reinstall -
         # was DX11' card and a game with anti-cheat are on the tab, and update
         # all leaves both alone
@@ -453,6 +471,11 @@ class LibraryPage(Page):
             return True
         if (e.state & 0x4) and ks.lower() == "f":
             self.field.focus()
+            return True
+        # 'add a game' from the keyboard; the folder dialog opens after the
+        # key, not inside its handler
+        if (e.state & 0x4) and ks.lower() == "o":
+            self.c.after(1, self.app.pick_folder)
             return True
         if e.char and e.char.isprintable() and not (e.state & 0x4) and self.field:
             self.field.focus(append=e.char)

@@ -293,6 +293,9 @@ class Support:
     # reads it, so "standalone [experimental]" does not appear there with no
     # reason beside it.
     steered_from: str = ""
+    # Set by _shared_steer when the shared results for games like this one
+    # moved the recommendation: the route the tool's own rules picked.
+    shared_from: str = ""
     reason: str = ""
     options: list[str] = None             # type: ignore[assignment]
     supported: bool = True                # False: no component reaches this API
@@ -365,7 +368,8 @@ def _ours(folder: Path, name: str) -> bool:
 
 
 def detect(install_dir: Path, folder: Path, api: str, bitness: int,
-           sm: int | None = None, driver: str | None = None) -> Support:
+           sm: int | None = None, driver: str | None = None,
+           shared: dict | None = None, exe=None) -> Support:
     """Work out what the game supports and which path to recommend.
 
     `sm` is the card's CUDA architecture when known (gpu.detect). On any RTX
@@ -375,6 +379,11 @@ def detect(install_dir: Path, folder: Path, api: str, bitness: int,
     20 gets no such steer; nothing runs there anyway. A D3D12 game with FSR
     or XeSS instead of DLSS is steered only on RTX 50, the cards the author
     tested - one more hook has to land there.
+
+    `shared` is the compatibility list and `exe` the game's executable; with
+    both, the shared results for games like this one can move the
+    recommendation (_shared_steer). Without them - offline, or a caller that
+    does not pass them - the rules here stand as they are.
     """
     s = _detect(install_dir, folder, api, bitness)
     if OPTI in s.options and s.recommended == NATIVE and (sm is None or sm >= 75):
@@ -402,8 +411,44 @@ def detect(install_dir: Path, folder: Path, api: str, bitness: int,
                     f"neural rendering, with the model-resolution dial. "
                     f"Works in many games, not all - the feeder is the proven "
                     f"fallback.")
+    # The shared list is fetched from the web and cached: a malformed copy
+    # must not cost the whole game page its routes (gate 2.0.6).
+    try:
+        _shared_steer(s, api, sm, shared, exe)
+    except Exception:
+        pass
     _driver_steer(s, driver, folder, install_dir)
     return s
+
+
+def _shared_steer(s: Support, api: str, sm: int | None, shared: dict | None,
+                  exe=None) -> None:
+    """Move the recommendation when games like this one say so, clearly.
+
+    `shared` is the compatibility list (community.cached()); None or {} and
+    nothing here runs, so an offline machine and every caller that does not
+    pass it get the rules above unchanged. The per-game rule comes first
+    everywhere else and here too: a game with MIN_REPORTS results of its own
+    is steered by those (advice / rank_routes), not by its class. The bar is
+    community.class_pick's - MIN_CLASS results on both routes and ranges
+    that do not overlap - and the route has to fit this card.
+    """
+    if not shared or not s.options or s.recommended not in s.options:
+        return
+    if s.recommended == REMIX:
+        return          # a Remix game is never recommended anything else
+    from . import community
+    if community.reports_for(shared, exe) >= community.MIN_REPORTS:
+        return
+    klass = community.game_class(api, s.native_dlss, s.upscaler)
+    pick, why = community.class_pick(shared, klass, s.options, s.recommended)
+    if not pick or not fit(pick, api, s.native_dlss, sm, upscaler=s.upscaler)[0]:
+        return
+    was = s.recommended
+    s.recommended = pick
+    s.shared_from = was
+    s.reason = (f"{why} Without those results the tool would pick {was}; "
+                f"it stays in the list.")
 
 
 def _driver_steer(s: Support, driver: str | None, folder=None, install_dir=None) -> None:

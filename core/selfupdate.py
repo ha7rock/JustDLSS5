@@ -2,14 +2,16 @@ r"""Downloading and applying an update to this executable.
 
 A running .exe cannot overwrite itself on Windows, so the swap is done by a
 tiny batch file that waits for this process to exit, replaces the file, and
-starts the new one. The old executable is kept as .old until the next update,
-so a bad build can be rolled back by hand.
+starts the new one. The old executable is kept as .old.exe through the new
+build's first run, so a bad build can be rolled back by hand, and removed the
+next time the tool starts (settle()).
 
 Deliberately conservative:
   - the download is verified to be a real 64-bit PE of a sane size before
     anything is replaced;
   - the swap only happens after the user asks for it, never on its own;
-  - nothing is deleted, only renamed.
+  - nothing is deleted during the swap, only renamed; the old build goes
+    only after the new one has come up once (settle()).
 
 Two release layouts are understood. Today's is one self-contained .exe.
 A release may instead ship the .exe with an `_internal` folder beside it
@@ -210,10 +212,9 @@ def swap_script(current: Path, new_exe: Path) -> str:
     one kept as _internal.old beside the .old.exe, so the pair can be put
     back by hand.
     """
-    old = current.with_suffix(".old.exe")
+    old, old_int = old_build(current)
     new_int = new_exe.parent / INTERNAL
     cur_int = current.parent / INTERNAL
-    old_int = current.parent / (INTERNAL + ".old")
     lines = [
         "@echo off",
         "setlocal",
@@ -236,7 +237,7 @@ def swap_script(current: Path, new_exe: Path) -> str:
         # drives (and reports success anyway), so the folder is copied with
         # xcopy and the copy is checked before anything is committed. The
         # exe is copied too, for the same reason; the old pair stays as
-        # .old.exe + _internal.old until the next update.
+        # .old.exe + _internal.old until settle() removes it.
         lines += [
             f'if exist "{old_int}" rmdir /s /q "{old_int}" >nul 2>&1',
             f'if exist "{cur_int}" move /y "{cur_int}" "{old_int}" >nul 2>&1',
@@ -292,6 +293,55 @@ def clean_env() -> dict[str, str]:
            if not k.upper().startswith("_PYI_")}
     env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
     return env
+
+
+# The version whose window has come up at least once on this machine.
+SETTLED = "update_settled"
+
+
+def old_build(current: Path) -> tuple[Path, Path]:
+    """Where the swap keeps the previous build: the .exe and, for a
+    one-folder build, its _internal folder."""
+    return current.with_suffix(".old.exe"), current.parent / (INTERNAL + ".old")
+
+
+def settle(version: str = "") -> list[Path]:
+    """Remove the previous build once this one has proved it starts (#450).
+
+    Called a few seconds after the main window is up. The first time a
+    version gets here it only records that it did; the next start of the
+    same version removes the .old.exe and _internal.old the swap left. So the
+    old build is there for the whole of the new one's first run - long
+    enough to notice a build that is broken and go back - and a new build
+    that dies before its window appears never records itself, so the old
+    one stays until one does. "Until the next update" left it there for
+    good, and people read the leftover as a failed update.
+    """
+    from . import prefs
+    current = running_exe()
+    if current is None:
+        return []
+    version = version or update.VERSION
+    if prefs.get(SETTLED) != version:
+        prefs.set_(SETTLED, version)
+        return []
+    removed: list[Path] = []
+    old, old_int = old_build(current)
+    try:
+        if old.is_file() and old != current:
+            old.unlink()
+            removed.append(old)
+    except OSError:
+        pass            # running, or held by a scanner: the next start tries again
+    try:
+        # Only once the .exe is gone: an old build somebody went back to and
+        # is running right now needs its folder.
+        if old_int.is_dir() and not old.exists():
+            shutil.rmtree(old_int)
+            removed.append(old_int)
+    except OSError:
+        pass
+    return removed
 
 
 def apply_and_restart(new_exe: Path) -> None:

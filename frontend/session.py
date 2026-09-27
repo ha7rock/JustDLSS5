@@ -89,7 +89,8 @@ def analyse(entry, target=0, started=""):
             related = False
     if started:
         report = diagnose.answered(report, started,
-            diagnose._presence(folder, manifest, route, game_root=game.folder), str(manifest.get("kind") or "game"))
+            diagnose._presence(folder, manifest, route, game_root=game.folder), str(manifest.get("kind") or "game"),
+            event="\n".join(wincrash.describe(crash, str(manifest.get("proxy") or ""), tuple(manifest.get("files") or []))) if related else "")
     verdict = report.verdict
     if related and verdict.startswith("Working"):
         verdict = "模型曾运行，但 Windows 记录了游戏崩溃。 / The model ran, but Windows recorded a game crash."

@@ -373,6 +373,11 @@ def _get(url: str, timeout: int = 60, attempts: int = 3) -> bytes:
                 from . import net
                 if net.untrusted(url.split("/")[2], e):
                     raise net.untrusted(url.split("/")[2], e) from e
+                # The same answers net.download gives (#434, #438): this is
+                # where the version lists are read, and a blocked socket
+                # here ends the install as surely as one on a download.
+                if net.unreachable(url.split("/")[2], e):
+                    raise net.unreachable(url.split("/")[2], e) from e
                 raise
             time.sleep(2.0 * (attempt + 1))
     raise last if last else RuntimeError(url)

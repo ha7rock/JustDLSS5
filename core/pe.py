@@ -25,6 +25,10 @@ _SKIP_PARTS = (
     # The feeder's 32-bit helper, which our own install puts under host64\.
     # Ranked above a 32-bit game executable it was taken for the game.
     "dlss5-feed-host",
+    # Bonus apps shipped beside the game (#497: HCEDigitalExtrasApp-Win64-
+    # Shipping.exe won the tie against the game) - the same names the
+    # folder walk already prunes as directories.
+    "digitalextras", "extrasapp", "artbook", "soundtrack",
 )
 
 
@@ -260,7 +264,13 @@ def _has_d3d12_agility_sdk(folder: Path, bits: int | None = None) -> bool:
         files = {f.name.lower(): f for f in folder.iterdir() if f.is_file()}
     except OSError:
         return False
-    return any(n in files and _fits(files[n], bits)
+    # The standalone route writes nvngx_dlssg.dll itself, and a DirectX 11
+    # game it was installed into read as D3D12 on the next scan (#458, Mass
+    # Effect Andromeda: the add-on's own log says api=D3D11). A file of ours
+    # with the game's original backed up beside it is still the game's.
+    ours = {n for n in _ours_in(folder)
+            if n + ".dlss5-autopilot-backup" not in files}
+    return any(n in files and n not in ours and _fits(files[n], bits)
                for n in ("nvngx_dlssg.dll", "nvngx_dlssd.dll"))
 
 
@@ -319,6 +329,9 @@ def _ships_dlss(folder: Path, bits: int | None = None) -> str:
                     for f in man.get("files") or [] if isinstance(f, str)}
         except (OSError, ValueError, AttributeError):
             ours = set()
+    # ...except a file whose original we backed up: the game shipped it, and
+    # "does the game ship DLSS" is about the game, not the file on disk now.
+    ours = {n for n in ours if n + ".dlss5-autopilot-backup" not in names}
     # Another DLSS tool in the folder (a swapper's overlay add-on, a wrapper,
     # OptiScaler put in by hand) brings NGX files of its own. Arkham Knight is
     # DirectX 11, and a swapper's nvngx_dlss.dll beside it read as "the game
@@ -352,7 +365,8 @@ def detect_api(path: Path) -> tuple[str, str]:
         except PEError:
             bits = None
         if bits == 64:
-            return ("Unknown", f"{why} - but Direct3D 8 is 32-bit only, and "
+            # "DirectX 8", the name the window and install() give it.
+            return ("Unknown", f"{why} - but DirectX 8 is 32-bit only, and "
                                f"this exe is 64-bit")
     return api, why
 
@@ -724,6 +738,9 @@ def _engine_default(exe: Path, names: dict[str, Path] | None = None) -> tuple[st
     classic = _unreal_classic(exe, names)
     if classic:
         return classic
+    ue3 = _unreal3_win32(exe)
+    if ue3:
+        return ue3
     if _is_unreal(exe):
         return ("DX12", "an Unreal Engine game (Binaries/Win64 beside the "
                         "engine's own folder) - Direct3D 12 or 11, and "
@@ -732,6 +749,75 @@ def _engine_default(exe: Path, names: dict[str, Path] | None = None) -> tuple[st
                         "Unreal's OpenGL RHI, which its Windows builds do "
                         "not use")
     return None
+
+
+def _unreal3_win32(exe: Path) -> tuple[str, str] | None:
+    """A 32-bit Unreal Engine 3 game: Direct3D 9 unless its config says 11.
+
+    Its exe names d3d11.dll for the renderer it can switch to, and nothing
+    else is imported statically, so the string alone made Life is Strange
+    DX11 and the feed failed on ReShade's D3D9 backend (#479). The layout is
+    <root>\\Binaries\\Win32\\<game>.exe beside a <Game>\\CookedPC* folder;
+    AllowD3D11=True in that game's Config\\*Engine.ini keeps it D3D11.
+    """
+    parts = [p.lower() for p in exe.parts]
+    if len(parts) < 4 or parts[-2] != "win32" or parts[-3] != "binaries":
+        return None
+    root = exe.parent.parent.parent
+    try:
+        dirs = [d for d in sorted(root.iterdir())[:60] if d.is_dir()]
+        cooked = [d for d in dirs
+                  if any(c.is_dir() and c.name.lower().startswith("cookedpc")
+                         for c in sorted(d.iterdir())[:60])]
+    except OSError:
+        return None
+    if not cooked:
+        return None
+    try:
+        if exe_bitness(exe) != 32:
+            return None
+    except PEError:
+        return None
+    # The shipped defaults beside the game, and the player's own copy: UE3
+    # writes the in-game DX11 choice under Documents\My Games\<studio or
+    # game>\<Game>\Config (gate 2.0.6 - Arkham Origins style games).
+    # The player's copy is read first and decides either way; a Documents
+    # folder counts only when its studio/game folder is named like this
+    # game's own folder - "UDKGame" is every UDK game's name (gate 2.0.6).
+    docs = [Path.home() / "Documents", Path.home() / "OneDrive" / "Documents"]
+    key = re.sub(r"[^a-z0-9]", "", root.name.lower())
+
+    def _named_like_us(ini: Path) -> bool:
+        owner = re.sub(r"[^a-z0-9]", "", ini.parent.parent.parent.name.lower())
+        return bool(key and owner) and (owner in key or key in owner)
+
+    for d in cooked:
+        player: list[Path] = []
+        for doc in docs:
+            try:
+                player += [p for p in (doc / "My Games").glob(f"*/{d.name}/Config/*Engine.ini")
+                           if _named_like_us(p)][:10]
+            except OSError:
+                pass
+        try:
+            shipped = [p for p in (d / "Config").glob("*Engine.ini")][:10]
+        except OSError:
+            shipped = []
+        for ini in player + shipped:
+            try:
+                text = ini.read_text(encoding="utf8", errors="replace")[:400_000]
+            except OSError:
+                continue
+            said = re.search(r"(?im)^\s*AllowD3D11\s*=\s*(true|false)\b", text)
+            if said and said.group(1).lower() == "true":
+                return ("DX11", f"an Unreal Engine 3 game whose {ini.name} "
+                                f"sets AllowD3D11=True")
+            if said:
+                break                   # its own False: the default below
+    return ("DX9", "a 32-bit Unreal Engine 3 game (Binaries\\Win32 beside a "
+                   "CookedPC folder) - it draws with Direct3D 9 unless its own "
+                   "settings switch it to 11; the d3d11.dll its exe names is "
+                   "that option")
 
 
 def _runtime_graphics(exe: Path) -> tuple[str, str]:

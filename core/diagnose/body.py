@@ -24,7 +24,7 @@ from .layer import _dxvk_files
 
 __all__ = [
     "CLOSED_ITSELF", "NEVER_STARTED", "_block", "_dlss_record_root",
-    "_last_lines", "_presence", "answered", "said_started",
+    "_last_lines", "_presence", "answered", "event_line", "said_started",
     "_reshade_excerpt", "_their_provider", "_tool_log_lines", "issue_body"
 ]
 
@@ -66,6 +66,77 @@ def _reshade_excerpt(text: str, n: int = 25, budget: int = 1500) -> list[str]:
                 break
             del lines[i]
     return lines
+
+
+def _keyed_lines(text: str, kind, n: int = 20, budget: int = 900,
+                 width: int = 200) -> list[str]:
+    """The last `n` lines, plus the newest line of every kind `kind(line)`
+    names, fitted to `budget` by dropping the oldest unkeyed lines first.
+
+    A tail alone loses the line a verdict was decided on: #458's standalone
+    log was "Working." on the machine (10 frames through the pipeline) and
+    its report carried only the teardown after them, and #289's OptiScaler
+    tail dropped the dispatch lines - both replay to another answer."""
+    lines = [ln.rstrip() for ln in text.splitlines()]
+    newest: dict[str, int] = {}
+    for i, ln in enumerate(lines):
+        k = kind(ln)
+        if k:
+            newest[k] = i
+    firm = set(newest.values())
+    idx = sorted(firm | set(range(max(0, len(lines) - n), len(lines))))
+    out = [(i, lines[i][:width]) for i in idx if lines[i].strip() or i in firm]
+    while len(out) > 1 and len("\n".join(t for _, t in out)) > budget:
+        j = next((j for j, (i, _) in enumerate(out) if i not in firm), 0)
+        del out[j]
+    return [t for _, t in out]
+
+
+def _standalone_kind(ln: str) -> str:
+    """The standalone add-on lines _analyse_standalone decides on."""
+    for k in ("pipeline FAILED at", "contract ready:", "on-present frame "):
+        if k in ln:
+            return k
+    return ""
+
+
+def _opti_kind(ln: str) -> str:
+    """The OptiScaler lines _analyse_optiscaler decides on: the forwarder, the
+    settings echo, a failure, and the model's own work (a duration or a count
+    of finished pictures, #168 #311)."""
+    if "forwarder loaded" in ln:
+        return "forwarder"
+    if not ("DLSS-NR" in ln or "dlssnr" in ln.lower()):
+        return ""
+    if re.search(r"DlssNr\.\w+:", ln):
+        return "setting"
+    low = ln.lower()
+    if any(k in low for k in ("create failed", "unavailable", "did not run",
+                              "not found beside", "would not load",
+                              "disabling for this session", "refused")):
+        return "failed"
+    if "running at" in ln or re.search(r"\d\s*ms\b", ln) \
+            or re.search(r"finished picture:\s*[1-9]", ln):
+        return "work"
+    return "nr"
+
+
+_FEED_KINDS = (("attached", "attached."), ("provider", "DLSS5_MV_PROVIDER="),
+               ("addon", "DLSS 5 add-on:"), ("technique", "DLSS5_Feed.fx technique"),
+               ("notloaded", "is not loaded"), ("mv", "MV probe"),
+               ("depth", "Depth probe"), ("spawned", "host spawned"),
+               ("connected", "host connected"), ("building", "building: "),
+               ("fault", " stack, by module (innermost first):"))
+
+
+def _feed_kind(ln: str) -> str:
+    """The dlss5-feed.log lines the feeder chain decides on (chain.py)."""
+    for k, word in _FEED_KINDS:
+        if word in ln:
+            return k
+    if re.search(r"frame \d+ (?:delivered|evaluated)", ln):
+        return "frame"
+    return ""
 
 
 def _last_lines(text: str, n: int, keep=None, width: int = 200) -> list[str]:
@@ -231,6 +302,26 @@ def _presence(install_dir: Path, man: dict, route: str, game_root=None) -> list[
                          + (f"{_ini2.ADDON_SWITCH}={st['switch']}"
                             if st.get("switch") is not None else
                             f"no [{_ini2.ADDON_SECTION}] line in ReShade.ini"))
+    except Exception:
+        pass
+    # The person's own frame generation files (#370) and the Windows graphics
+    # setting (#427): both are things a reply asks the person to confirm,
+    # so the report says what the record holds and what is on disk.
+    try:
+        own = man.get("own_fg") or {}
+        if isinstance(own, dict) and own.get("recipe"):
+            fl = [str(f) for f in (own.get("files") or [])]
+            extra.append(f"- frame generation files: {own['recipe']} ("
+                         + ", ".join(f"{f} {'present' if (install_dir / f).is_file() else 'MISSING'}"
+                                     for f in fl[:4]) + ")")
+        from .. import gpupref as _gp
+        for r in (man.get("gpu_pref") or [])[:3]:
+            if isinstance(r, dict) and r.get("exe"):
+                now = _gp.chosen(r["exe"])
+                extra.append(f"- Windows graphics setting: {Path(str(r['exe'])).name}: "
+                             + {None: "not set", "0": "let Windows decide",
+                                "1": "power saving", "2": "High performance"}
+                             .get(now, str(now)))
     except Exception:
         pass
     rr = (man.get("components") or {}).get("dlssd")
@@ -413,7 +504,14 @@ NEVER_STARTED = "never started"
 # the backlog - "we ask the person to look in the overlay", 21 of 121).
 _LOOK_IN_GAME = ("confirm in the", "check '", "the switch is on",
                  "open the overlay", "the only live picture", "Working.",
-                 "Add-ons loaded", "Inconclusive", "Loaded and set up")
+                 "Add-ons loaded", "Inconclusive", "Loaded and set up",
+                 # "switch it on in the game" needs a game that stays up too:
+                 # #460 crashed on start and was told to press Insert and
+                 # tick a box, #461 crashed on turning the upscaler on and
+                 # was told to turn the upscaler on (2.0.5).
+                 "not switched on", "the game's own upscaler has to be on",
+                 "made no D3D12 DLSS call", "never called DLSS",
+                 "no neural frame followed")
 
 
 _OVERLAY_ASK = re.compile(r"\b(open|press|check)\b[^.]{0,60}\b(overlay|panel|tab)\b",
@@ -432,7 +530,15 @@ def said_started(text: str) -> str:
     return ""
 
 
-def answered(rep: Report, started: str, presence=(), kind: str = "game") -> Report:
+def event_line(crash) -> str:
+    """"X.exe faulted in Y.dll 0xC0000005" from a wincrash.Crash, or ""."""
+    if crash is None or not getattr(crash, "module", ""):
+        return ""
+    return f"{crash.exe} faulted in {crash.module} {crash.code}".strip()
+
+
+def answered(rep: Report, started: str, presence=(), kind: str = "game",
+             event: str = "") -> Report:
     """The verdict, corrected by what the person saw.
 
     `started` is their answer to "did the game start?" and `presence` the
@@ -471,11 +577,16 @@ def answered(rep: Report, started: str, presence=(), kind: str = "game") -> Repo
                  "with another route - where the window shows 'what other "
                  "people found', it says which worked for this game")
     what = ("closed itself" if said == CLOSED_ITSELF else "never started")
+    # Windows' own record of the fault, when the report carries one (#460:
+    # "nothing here recorded why" sat above the line that recorded it).
+    event = (event or "").strip()
+    seen = (f"Windows recorded it: {event}. " if event else "")
     detail = (("The logs say neural rendering ran, and you say the game "
                f"{what} - so the session did not end well, whatever the "
-               "logs got as far as. " if ran else
-               f"The logs could not show why, and the check they would "
-               f"have asked for needs a running game. ")
+               "logs got as far as. " + seen if ran else
+               seen + ("The add-on logs could not show why. " if event else
+                       "The logs could not show why, and the check they would "
+                       "have asked for needs a running game. "))
               + "In this order: " + "; then ".join(steps) + ".")
     # The findings that said the same thing as the verdict - go and look in
     # the overlay - go with it, or the report prints the correction above
@@ -494,6 +605,9 @@ def answered(rep: Report, started: str, presence=(), kind: str = "game") -> Repo
         rep.verdict = ("The logs show an earlier session that ran; this time "
                        "the game never started - see below for what to take "
                        "out first.")
+    elif event:
+        rep.verdict = ("Windows recorded the game faulting - see below for "
+                       "what to take out first.")
     elif said == CLOSED_ITSELF:
         rep.verdict = ("The game closed itself and nothing here recorded why "
                        "- see below for what to take out first.")
@@ -553,7 +667,8 @@ def issue_body(version: str, gpu_name: str, sm, driver: str, game, route: str,
             import copy
             last_diag = answered(copy.deepcopy(last_diag),
                                  str(answers.get("started") or ""), presence,
-                                 str(getattr(game, "kind", "") or "game"))
+                                 str(getattr(game, "kind", "") or "game"),
+                                 event_line(crash))
         except Exception:
             pass
     if last_diag is not None:
@@ -618,17 +733,20 @@ def issue_body(version: str, gpu_name: str, sm, driver: str, game, route: str,
     # builds out of older sessions over the last one's own errors.
     parts.append(_block("ReShade.log",
                         _reshade_excerpt(_last_session(reshade)), 1500))
-    parts.append(_block("dlss5-feed.log", _last_lines(feed, 20), 1400))
+    # The last session, as chain.py reads it, and its deciding lines kept.
+    parts.append(_block("dlss5-feed.log",
+                        _keyed_lines(_last_feed_session(feed), _feed_kind, 20, 1400), 1400))
     # A 32-bit game's DLSS runs in the helper, and #252's report carried
     # every log except the one that named the fault.
     if route == "feeder" and d is not None and (d / HOST_LOG).is_file():
         parts.append(_block("dlss5-feed-host.log",
                             _helper_excerpt(_tail(d / HOST_LOG, 150_000)), 900))
     if route == "optiscaler":
-        parts.append(_block("OptiScaler.log", _last_lines(opti, 20), 900))
+        parts.append(_block("OptiScaler.log", _keyed_lines(opti, _opti_kind), 900))
     if route == "standalone":
         parts.append(_block("standalone-dlssnr.log",
-                            _last_lines(_tail(model.STANDALONE_LOG, 100_000), 20), 900))
+                            _keyed_lines(_tail(model.STANDALONE_LOG, 100_000),
+                                         _standalone_kind), 900))
     if route == "remix" and d is not None:
         # Only the lines that say anything about the neural pass: the Remix
         # log is enormous and the rest of it is path-tracing chatter.

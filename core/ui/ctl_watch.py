@@ -13,7 +13,7 @@ import threading
 import time
 from pathlib import Path
 
-from .. import autopilot, diagnose, dlss, gpu, installer, log, prefs, verdicts
+from .. import autopilot, community, diagnose, dlss, gpu, installer, log, prefs, verdicts
 from ..lookout import Lookout
 from . import theme as T
 from . import win
@@ -159,8 +159,11 @@ class WatchControl:
         if g is None or not WatchControl.ran(rep, seen) or not verdicts.route_failed(rep.verdict):
             return []
         try:
-            sup = dlss.detect(g.install_dir, g.folder, g.api, g.bitness or 0, sm, driver=gpu.driver_version())
-            return autopilot.plan(sup.recommended, list(sup.options or []), None, g)
+            shared = community.cached()
+            sup = dlss.detect(g.install_dir, g.folder, g.api, g.bitness or 0, sm, driver=gpu.driver_version(),
+                              shared=shared, exe=g.exe)
+            return autopilot.plan(sup.recommended, list(sup.options or []), shared or None, g,
+                                  klass=community.game_class(g.api, sup.native_dlss, sup.upscaler))
         except Exception:
             log.exception(f"routes for {g.name}")
             return []

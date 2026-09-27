@@ -13,7 +13,7 @@ import tkinter as tk
 import webbrowser
 from pathlib import Path
 
-from .. import gpu, library, log, prefs, selfupdate, update
+from .. import community, gpu, library, log, prefs, selfupdate, update
 from . import theme as T
 from . import win
 from .ctl_dlss import DlssControl
@@ -76,6 +76,17 @@ class App(LibraryControl, GameControl, VideoControl, WatchControl, DlssControl):
         self.load_shared()
         # read which DLSS the games ship once the library is up (a day-old read only)
         root.after(5000, self.dlss_background)
+        # the window is up: the build before an update can go on the next start
+        root.after(3000, self._settle_update)
+
+    def _settle_update(self) -> None:
+        def work():
+            try:
+                for p in selfupdate.settle():
+                    log.write(f"removed the previous build: {p}")
+            except Exception:
+                log.exception("removing the previous build")
+        threading.Thread(target=work, daemon=True).start()
 
     # ------------------------------------------------------------ start
     def _open_start(self) -> None:
@@ -176,6 +187,7 @@ class App(LibraryControl, GameControl, VideoControl, WatchControl, DlssControl):
             card = "graphics card not read"
         return [
             ("how it works", lambda: webbrowser.open(f"{REPO_URL}#which-route-a-game-gets")),
+            ("compatibility list", lambda: webbrowser.open(community.PAGE_URL)),
             ("report a bug", lambda: self.report_bug("bug")),
             ("suggest a feature", self.suggest),
             ("open the log file", self.shell.open_log_file),
@@ -273,7 +285,8 @@ class App(LibraryControl, GameControl, VideoControl, WatchControl, DlssControl):
             presence = diagnose._presence(d, diagnose._manifest(d), route,
                                           getattr(g, "folder", None))
             new = diagnose.answered(copy.deepcopy(rep), str(answers.get("started") or ""),
-                                    presence, str(getattr(g, "kind", "") or "game"))
+                                    presence, str(getattr(g, "kind", "") or "game"),
+                                    diagnose.event_line(getattr(self, "_last_crash", None)))
         except Exception:
             return
         if new.verdict == shown.verdict:
@@ -369,7 +382,8 @@ class App(LibraryControl, GameControl, VideoControl, WatchControl, DlssControl):
             return
         if not self.shell.ask("update and restart?",
                               "The new version is downloaded and the tool restarts into it. "
-                              "The current build is kept beside it as .old.exe, so you can go back.",
+                              "The current build is kept beside it as .old.exe for the new one's first run, so you "
+                              "can go back; it is removed when the new version starts a second time.",
                               "update", "not now"):
             return
         self.busy = True

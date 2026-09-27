@@ -46,6 +46,11 @@ _FULL_WINERROR = (112, 39)
 # for the diagnosis to read.
 STOP_NOTE = "install stopped: "
 DISK_FULL_NOTE = STOP_NOTE + "the drive ran out of space"
+# ...and the note beside it when the files that install wrote were taken
+# back out again (installer._roll_back): the record then holds the reason
+# and nothing else, and "whatever came before that step is in place" would
+# describe a folder that is not there.
+ROLLED_BACK_NOTE = "rolled back: nothing of this install was left in the folder"
 
 
 def is_disk_full(e: BaseException | None) -> bool:
@@ -167,6 +172,115 @@ def untrusted(name: str, e: Exception) -> RuntimeError | None:
         f"certificate the first time a Microsoft program needs it), then "
         f"try again. An antivirus that inspects HTTPS causes this too - "
         f"exclude this tool or turn that off.")
+
+
+# Connection failures that are not about the certificate, by the reason
+# text, not the class: urllib wraps the socket error in a URLError and the
+# class name is often gone by the time anybody reads the line, and the
+# WinError text is in the PC's own language (#26 German, a Chinese one) -
+# so the codes are matched, and the English words only where there is no
+# code. One family, several faults: #434's 10013 is Windows refusing the
+# socket and installing again gets the same refusal; #438's EOF in the
+# handshake is the connection being cut, four attempts in a row.
+# (kind, what is matched in the lowered text). First match wins.
+_NET_KINDS = (
+    ("blocked", ("winerror 10013", "errno 10013")),
+    ("dns", ("getaddrinfo", "gaierror", "winerror 11001", "winerror 11004",
+             "errno 11001", "errno 11004", "name or service not known")),
+    ("refused", ("winerror 10061", "connectionrefused", "connection refused")),
+    ("timeout", ("winerror 10060", "timed out", "timeouterror")),
+    ("cut", ("unexpected_eof", "eof occurred in violation", "winerror 10054",
+             "winerror 10053", "connectionreset", "connectionaborted",
+             "remotedisconnected", "remote end closed", "incompleteread",
+             "connection reset", "connection aborted")),
+)
+
+
+def net_kind(e) -> str:
+    """"blocked" / "dns" / "refused" / "timeout" / "cut", or "".
+
+    Takes an exception or its text (a traceback line from a report). A
+    certificate failure is not one of these: untrusted() has its own four
+    answers for it, and an HTTP status is an answer, not a failed connection.
+    """
+    text = str(e or "")
+    low = text.lower()
+    if "certificate_verify_failed" in low:
+        return ""
+    if isinstance(e, urllib.error.HTTPError):
+        return ""
+    winerror = getattr(e, "winerror", None) or getattr(
+        getattr(e, "reason", None), "winerror", None)
+    if winerror == 10013:
+        return "blocked"
+    for kind, keys in _NET_KINDS:
+        if any(k in low for k in keys):
+            return kind
+    return ""
+
+
+def net_explain(kind: str, host: str = "") -> tuple[str, str]:
+    """(what happened, what to do) for a net_kind(), in words.
+
+    `host` is the server that was being reached, "" when nobody knows it
+    (a traceback from an older build carries no URL)."""
+    h = host or "the download server"
+    if kind == "blocked":
+        return (f"Windows would not let this tool open a connection to {h} "
+                f"(WinError 10013) - a firewall or security program is "
+                f"blocking dlss5-autopilot.exe",
+                "Installing again gets the same refusal. Allow "
+                "dlss5-autopilot.exe in Windows Firewall, and in the "
+                "antivirus's own firewall if it has one, then install again.")
+    if kind == "cut":
+        return (f"the connection to {h} was cut off before the download "
+                f"finished",
+                f"Something between this PC and {h} keeps closing it - a VPN "
+                f"or proxy, an antivirus that scans HTTPS, or a network or "
+                f"provider that filters the site. Try another network (a "
+                f"phone hotspot is the quickest test) or turn the VPN/proxy "
+                f"off, then install again; what already downloaded is kept.")
+    if kind == "dns":
+        return (f"this PC could not look up {h}",
+                "The internet connection or its DNS is not answering. Check "
+                "that the PC is online, or set its DNS to 1.1.1.1, then "
+                "install again.")
+    if kind == "refused":
+        return (f"{h} refused the connection",
+                "That is usually a proxy or VPN in the way rather than the "
+                "server. Turn it off or try another network, then install "
+                "again.")
+    if kind == "timeout":
+        return (f"{h} did not answer in time",
+                "A slow or filtered connection. Try again in a few minutes "
+                "or from another network; what already downloaded is kept.")
+    return "", ""
+
+
+class Unreachable(urllib.error.URLError):
+    """A connection that failed for a reason net_kind() can name.
+
+    A URLError still, so every caller that catches one keeps working; its
+    text names the host and the fault, so the line at the bottom of a
+    traceback - the one a report carries and the diagnosis reads - says
+    what happened instead of "[WinError 10013] An attempt was made..."."""
+
+    def __init__(self, host: str, kind: str, original: BaseException):
+        super().__init__(getattr(original, "reason", original))
+        self.host, self.kind = host, kind
+        what, todo = net_explain(kind, host)
+        self.message = f"{host}: {what} ({original}). {todo}"
+
+    def __str__(self) -> str:
+        return self.message
+
+
+def unreachable(host: str, e: BaseException) -> "Unreachable | None":
+    """The error to raise for a connection net_kind() names, else None."""
+    if isinstance(e, Unreachable):
+        return e
+    kind = net_kind(e)
+    return Unreachable(host, kind, e) if kind else None
 
 
 def ssl_context() -> ssl.SSLContext:
@@ -327,9 +441,7 @@ def download(url: str, name: str, progress=None, force: bool = False,
                     f"connection and not this tool - it was asked "
                     f"{attempts} times. Wait a few minutes and install "
                     f"again: anything already downloaded is cached and will "
-                    f"not be fetched twice, and whatever this attempt did "
-                    f"write is recorded, so 'uninstall' takes it back "
-                    f"out.") from e
+                    f"not be fetched twice.") from e
             raise
         except ssl.SSLError as e:
             # "decryption failed or bad record mac" is not a hiccup: it is
@@ -345,6 +457,10 @@ def download(url: str, name: str, progress=None, force: bool = False,
                 # https://renodx-4.55.zip" is not an instruction.
                 if untrusted(_host(url), e):
                     raise untrusted(_host(url), e) from e
+                # An EOF is the connection being closed on us, not a
+                # scrambled one: its own answer, with the host in it.
+                if unreachable(_host(url), e):
+                    raise unreachable(_host(url), e) from e
                 raise RuntimeError(
                     f"{name}: the secure connection kept breaking ({e}). "
                     f"Something is sitting between this PC and {_host(url)} - an "
@@ -363,6 +479,11 @@ def download(url: str, name: str, progress=None, force: bool = False,
                 tmp.unlink(missing_ok=True)
                 if untrusted(_host(url), e):
                     raise untrusted(_host(url), e) from e
+                # #434/#438: "[WinError 10013]" and an EOF in the handshake
+                # came out as the bare socket error, with no host and no
+                # hint that installing again would change nothing.
+                if unreachable(_host(url), e):
+                    raise unreachable(_host(url), e) from e
                 raise
             time.sleep(1.0 * (attempt + 1))
     raise last if last else RuntimeError(f"{name}: download failed")
@@ -478,6 +599,8 @@ def fetch_text(url: str, _try: int = 0) -> bytes:
         if not isinstance(e, urllib.error.HTTPError):
             if untrusted(url.split("/")[2], e):
                 raise untrusted(url.split("/")[2], e) from e
+            if unreachable(_host(url), e):
+                raise unreachable(_host(url), e) from e
             raise
         # (HTTPError is a URLError; the checks below apply to it only)
         # Same anonymous API allowance as sources._get; keep the message
@@ -495,9 +618,7 @@ def fetch_text(url: str, _try: int = 0) -> bytes:
                 f"the server this file is published on, not your connection "
                 f"and not this tool - it was asked {RETRIES + 1} times. "
                 f"Wait a few minutes and install again: anything already "
-                f"downloaded is cached and will not be fetched twice, and "
-                f"whatever this attempt did write is recorded, so "
-                f"'uninstall' takes it back out.") from e
+                f"downloaded is cached and will not be fetched twice.") from e
         raise
 
 

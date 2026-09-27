@@ -4,6 +4,7 @@ GUI:            dlss5-autopilot.exe
 Command line:   dlss5-autopilot.exe "D:\Games\Game" [--check | --remove]
                                                     [--route native|upstream|optiscaler|renodx|bridge|feeder|standalone|remix]
                                                     [--dxvk | --no-dxvk] [--remix-swap] [--vr]
+                                                    [--no-gpu-pref]
                                                     [--opti-build y4my4my4m|wilsjo2|wilsjo2-mfg]
                 dlss5-autopilot.exe --video ["D:\DLSS5 Player"]  the video player
 
@@ -22,6 +23,11 @@ own changes nothing in the headset; OpenVR/SteamVR titles are not reached
 either way. The registration is per user rather than per game, and the
 last VR uninstall removes it. Untried with a headset here.
 
+--no-gpu-pref leaves Windows' graphics setting alone. By default, on a
+machine with an NVIDIA card and another GPU (a laptop), the game - and the
+32-bit feeder's helper - are set to High performance so they draw on the
+NVIDIA card; a choice already made there is kept, --remove takes it out.
+
 --opti-build applies to --route optiscaler only and picks a fork other
 than Dagherbou's: y4my4my4m (multi-pass, multi-frame generation),
 wilsjo2 (the neural pass before the upscaler - installed with that
@@ -38,8 +44,8 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from core import (dlss, games, gpu, installer, optiscaler,  # noqa: E402
-                  prefs, reshade_ini, update)
+from core import (community, dlss, games, gpu, installer,  # noqa: E402
+                  optiscaler, prefs, reshade_ini, update)
 
 
 def _console() -> None:
@@ -65,7 +71,7 @@ def _console() -> None:
 
 def cli(target: Path, remove: bool, check: bool, route: str = "",
         dxvk: bool | None = None, game=None, remix_swap: bool = False,
-        vr: bool = False, opti_build: str = "") -> int:
+        vr: bool = False, opti_build: str = "", gpu_pref: bool = True) -> int:
     g = game or games.manual(target)
     if not g.exe:
         print(f"error: no executable found in {target}", file=sys.stderr)
@@ -74,7 +80,8 @@ def cli(target: Path, remove: bool, check: bool, route: str = "",
     use_dxvk = bool(need) if dxvk is None else dxvk
     card, sm = gpu.detect()
     sup = dlss.detect(g.install_dir, g.folder, g.api, g.bitness or 0, sm,
-                      driver=gpu.driver_version())
+                      driver=gpu.driver_version(), shared=community.cached(),
+                      exe=g.exe)
     level, why_rel = installer.reliability(g, sup.recommended)
     print(f"game    : {g.name}")
     if card:
@@ -111,6 +118,10 @@ def cli(target: Path, remove: bool, check: bool, route: str = "",
                                    offered=sup.options)
         if warn:
             print(f"driver  : {warn}")
+        said = community.driver_note(community.cached(), gpu.driver_version() or "",
+                                     sup.recommended)
+        if said:
+            print(f"shared  : {said}")
     print(f"route   : {dlss.LABELS[sup.recommended]}")
     for o in sup.options:
         usable, note = dlss.fit(o, g.api, sup.native_dlss, sm,
@@ -133,8 +144,13 @@ def cli(target: Path, remove: bool, check: bool, route: str = "",
 
     ok, why = installer.check_supported(g)
     if check:
+        # The RTX 40 MFG package on another card is refused by install()
+        # before a file is written; --check said "ready" over it (gate
+        # 2.0.5). The same check, the same words.
+        refused = (optiscaler.card_refusal(opti_build, sm)
+                   if ok and sup.recommended == installer.OPTI else "")
         print(f"installed: {'yes' if g.installed else 'no'}")
-        print(f"status   : {'ready' if ok else why}")
+        print(f"status   : {refused or ('ready' if ok else why)}")
         # The one mode whose whole job is "look, write nothing" was the one
         # that never said the executable is a launcher: the warning reached
         # the command line only in install()'s report, after the files were
@@ -148,9 +164,18 @@ def cli(target: Path, remove: bool, check: bool, route: str = "",
             popt = installer.Options(path=sup.recommended,
                                      native_dlss=sup.native_dlss, dxvk=use_dxvk, vr=vr, opti_build=opti_build,
                                      upscaler=sup.upscaler,
-                                     remix_swap=remix_swap)
+                                     remix_swap=remix_swap, gpu_pref=gpu_pref)
             print(f"plan     : {' -> '.join(installer.plan(g, popt))}")
-        return 0
+            # ...and what the MFG package needs from the game, which only
+            # the finished install used to say.
+            for w in installer._mfg_warnings(g, popt, g.install_dir):
+                print(f"warning  : {w}")
+            if popt.opti_build == optiscaler.PRESR_MFG and popt.fg and g.api == "DX12":
+                print(f"warning  : {installer.MFG_FSR_FG}")
+            gp = installer._gpu_pref_line(g.install_dir, g, popt)
+            if gp:
+                print(f"outside  : {gp} (--no-gpu-pref to skip)")
+        return 1 if refused else 0
     if not ok:
         print(f"error: {why}", file=sys.stderr)
         return 1
@@ -163,7 +188,7 @@ def cli(target: Path, remove: bool, check: bool, route: str = "",
         rep = installer.install(
             g, installer.Options(path=sup.recommended, native_dlss=sup.native_dlss,
                                  dxvk=use_dxvk, vr=vr, opti_build=opti_build, upscaler=sup.upscaler,
-                                 remix_swap=remix_swap),
+                                 remix_swap=remix_swap, gpu_pref=gpu_pref),
             on_log=print,
             on_prog=lambda p, m: print(f"\r  {p:3d}%  {m:<60}", end="", flush=True))
     except installer.InstallError as e:
@@ -244,7 +269,8 @@ def main() -> int:
                    opti_build=opti_build,
                    dxvk=(True if "--dxvk" in args
                          else False if "--no-dxvk" in args else None),
-                   remix_swap="--remix-swap" in args)
+                   remix_swap="--remix-swap" in args,
+                   gpu_pref="--no-gpu-pref" not in args)
     if "--help" in args or "-h" in args:
         _console()
         print(__doc__)
