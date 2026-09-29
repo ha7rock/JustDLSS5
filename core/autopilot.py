@@ -63,6 +63,7 @@ class Attempt:
     elsewhere: list[str] = field(default_factory=list)
     note: str = ""             # advice about the launch, never a reason
     why: str = ""              # why this attempt could not answer
+    no_record: bool = False    # installed, but nothing could record it
 
     @property
     def loaded(self) -> bool:
@@ -288,15 +289,23 @@ def attempt(game, opt, route: str, hooks: Hooks) -> Attempt:
     a = Attempt(route=route)
     hooks.log(f"> {route}: installing", "head")
     try:
-        hooks.install(game, hooks.options(opt, route))
+        rep = hooks.install(game, hooks.options(opt, route))
         a.installed = True
+        if installer.record_lost(rep):
+            # The next route would take these files for the game's own and
+            # back them up; the message says how to undo it by hand.
+            a.no_record = True
+            a.why = next(w for w in rep.warnings if w.startswith(installer.RECORD_LOST_HEAD))
+            hooks.log(f"  {route}: {a.why}", "warn")
+            return a
     except Exception as e:
         # An install that stops is this route's answer, not the pass's: a
         # 5xx from one publisher, a route this game refuses, a file the
         # game holds open. The next route is a different download and a
         # different set of files, so it is still worth trying.
-        a.why = str(e).strip().splitlines()[0] if str(e).strip() else \
-            type(e).__name__
+        # The cause, not the first line: a failed install opens with what
+        # was taken back out (gate 2.0.7), and the lock test below reads this.
+        a.why = installer.cause_of(e)
         hooks.log(f"  {route}: the install stopped - {a.why}", "warn")
         log.write(f"autopilot: {route} install failed: {e}", "warn")
         return a
@@ -394,6 +403,9 @@ def run(game, opt, routes: list[str], hooks: Hooks | None = None) -> Outcome:
             hooks.log(f"  {route}: {_names(a.ours)} loaded in the game", "ok")
             out.stopped = "loaded"
             break
+        if a.no_record:
+            out.stopped = a.why
+            break
         if not a.installed:
             # This route could not be put in place. The next one is a
             # different download and a different set of files.
@@ -481,7 +493,9 @@ def summary(out: Outcome) -> str:
     # What is in the folder NOW is the first thing the person needs: this
     # stops with an install in place, and leaving that unsaid is how
     # somebody ends up with a route they never chose and no idea of it.
-    if out.installed:
+    if out.attempts[-1].no_record:
+        where = ""      # the stopped text already says what to remove by hand
+    elif out.installed:
         where = (f" The {out.installed} route is what is installed in the "
                  f"folder now - 'uninstall' takes it back out.")
     elif out.left:

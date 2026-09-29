@@ -105,8 +105,13 @@ def has_dlssg(game_dir: Path, install_dir: Path | None = None,
         hits = dlss.find_dlss_files(Path(game_dir), names=DLSSG_FILES)
     except Exception:
         hits = []
+    from .installer import BACKUP_SUFFIX
     for rel in hits:
-        if rel.replace("\\", "/").rsplit("/", 1)[-1].lower() not in ours:
+        # An install of ours that replaced the game's own copy kept it
+        # beside ours as a backup: the game does ship frame generation
+        # (gate 2.0.6, the exception dlss._ours already makes).
+        if rel.replace("\\", "/").rsplit("/", 1)[-1].lower() not in ours \
+                or (Path(game_dir) / (rel + BACKUP_SUFFIX)).is_file():
             return rel
     return ""
 

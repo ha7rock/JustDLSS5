@@ -60,6 +60,19 @@ RECIPES: dict[str, Recipe] = {
         tip="the game has to ship DLSS frame generation of its own"),
 }
 
+# dlssg_for_sm86's "alternatives\" folder: the same proxy under the names a
+# game that never loads version.dll does load. Picked under one of these, it
+# goes in under that name - renamed to version.dll it would never load, which
+# is why the person picked it (its readme, 0.3.5). dinput8.dll is left out:
+# REFramework and the ASI loaders take that name on these routes.
+SM86_ALTERNATIVES = ("winmm.dll", "dxgi.dll", "d3d12.dll", "dbghelp.dll")
+for _alt in SM86_ALTERNATIVES:
+    RECIPES["sm86-" + _alt[:-4]] = Recipe(
+        "sm86-" + _alt[:-4], f"dlssg_for_sm86 as {_alt} (RTX 30 frame generation)",
+        ((_alt, _alt), ("dlssg_sm86.ini", "dlssg_sm86.ini")),
+        RECIPES["sm86"].markers, tip=RECIPES["sm86"].tip)
+del _alt
+
 STORE = "own-fg"
 UNTRIED = ("experimental - not run on this project's own card (an RTX 40); "
            "please share the result")
@@ -166,6 +179,14 @@ def identify(picked: list[Path]) -> tuple[str, dict[str, Path]]:
             break
     if not key and find("dlssg_sm86.ini") is not None:
         key = "sm86"
+    if key == "sm86" and dll.name.lower() in SM86_ALTERNATIVES:
+        key = "sm86-" + dll.name.lower()[:-4]
+    elif key == "sm86" and not dll.name.lower().startswith("version"):
+        # Renamed to version.dll it would load where the person chose it not
+        # to (gate 2.0.7); dinput8.dll is REFramework's and the ASI loaders'.
+        raise OwnFgError(
+            f"{dll.name} is a dlssg_for_sm86 proxy this tool does not place - pick version.dll, "
+            f"or one of {', '.join(SM86_ALTERNATIVES)} from its alternatives folder")
     if not key:
         raise OwnFgError(
             f"{dll.name} is neither dlssg_for_sm86 (version.dll with dlssg_sm86.ini beside it) nor "
@@ -179,8 +200,12 @@ def identify(picked: list[Path]) -> tuple[str, dict[str, Path]]:
             continue
         p = find(src)
         if p is None:
-            raise OwnFgError(f"{src} was not beside {dll.name} - pick both files from the "
-                             f"{r.label.split(' (')[0]} download")
+            # dlssg_for_sm86 keeps its alternatives\ proxies in a folder of
+            # their own, without the ini, and one file dialog cannot pick from
+            # two folders (gate 2.0.7).
+            raise OwnFgError(f"{src} was not beside {dll.name}. Copy it from the "
+                             f"{r.label.split(' (')[0].split(' as ')[0]} download into the "
+                             f"folder {dll.name} is in, then pick {dll.name} again")
         out[dst] = p
     return key, out
 
@@ -208,11 +233,39 @@ def store(key: str, files: dict[str, Path]) -> Path:
             old.rename(d)
         raise
     shutil.rmtree(old, ignore_errors=True)
+    try:
+        have = prefs.get(FORGOTTEN) or []
+        if key in have:
+            prefs.set_(FORGOTTEN, [k for k in have if k != key])
+    except Exception:
+        pass
     return d
+
+
+FORGOTTEN = "own_fg_forgotten"
+
+
+def forgotten(key: str) -> bool:
+    """Did the person press 'forget them' on this set (and not add it again)?
+
+    The tool's copy is shared by every game, and a game whose record names
+    the set rebuilt the choice from that record on its next visit, so the
+    next install kept the files - 'forget them' undone (gate 2.0.7). A
+    forgotten set reads as none there, and the install takes the files out."""
+    try:
+        return key in (prefs.get(FORGOTTEN) or [])
+    except Exception:
+        return False
 
 
 def forget(key: str) -> None:
     shutil.rmtree(store_dir(key), ignore_errors=True)
+    try:
+        have = [k for k in (prefs.get(FORGOTTEN) or []) if isinstance(k, str)]
+        if key not in have:
+            prefs.set_(FORGOTTEN, have + [key])
+    except Exception:
+        pass
 
 
 def recorded(man: dict | None) -> tuple[str, list[str]]:
@@ -244,7 +297,8 @@ def refusal(root: Path, key: str, opti_proxy: str, man: dict | None, route_chang
             if isinstance(f, str)}
     for n in dests(key):
         if opti_proxy and n.lower() == opti_proxy.lower():
-            return (f"OptiScaler would load as {opti_proxy} here, the name {r.label.split(' (')[0]} "
+            return (f"OptiScaler would load as {opti_proxy} here, the name "
+                    f"{r.label.split(' (')[0].split(' as ')[0]} "
                     f"needs. Choose another name in 'loads as' and install again.")
         p = root / n
         if not p.is_file():
@@ -263,7 +317,8 @@ def refusal(root: Path, key: str, opti_proxy: str, man: dict | None, route_chang
             pass
         what = "a file of this tool's from another option" if n.lower() in ours \
             else "a file this tool did not put there (another mod's, or a copy placed by hand)"
-        return (f"{n} is already in the game folder and it is {what}, not the {r.label.split(' (')[0]} "
+        return (f"{n} is already in the game folder and it is {what}, not the "
+                f"{r.label.split(' (')[0].split(' as ')[0]} "
                 f"file you added. Move it out of {root} and install again, or set 'frame generation "
                 f"files' to none.")
     return ""

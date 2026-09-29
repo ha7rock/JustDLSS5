@@ -19,10 +19,14 @@ Part of core/diagnose; see __init__.py.
 from __future__ import annotations
 import re
 
+from pathlib import Path
+
 from .model import *  # noqa: F401,F403
+from .evidence import _same_launch
 
 
-__all__ = ["_helper_session", "_helper_excerpt", "_helper_verdict", "_fed_the_helper"]
+__all__ = ["_helper_session", "_helper_excerpt", "_helper_verdict", "_fed_the_helper",
+           "_helper_same_launch"]
 
 _HOST_BANNER = re.compile(r"^[\d:.]+\s+dlss5-feed-host\S*\s", re.M)
 # DXGI_ERROR_DEVICE_REMOVED. Any other Present code is left alone: the
@@ -110,6 +114,34 @@ def _clock(stamp: str) -> float | None:
         return None
     h, mi, s, ms = (int(x) for x in m.groups())
     return h * 3600 + mi * 60 + s + ms / 1000
+
+
+def _helper_same_launch(text: str, htext: str, feed: Path, host: Path) -> bool:
+    """Is the helper's log from the launch the feed log's last session is?
+
+    Read off the logs' own clocks: the helper's first stamp has to fall
+    within three minutes after the feed's last "host spawned" line. The
+    files' times drift apart while the person plays on - the feed log keeps
+    growing and the helper's stops once it is up - so on a long session
+    the time check threw away the helper's log of that very launch (gate
+    2.0.6, the twin of #482's). Without both stamps, the files' times."""
+    spawn = None
+    for spawn in re.finditer(r"^(\S+)\s+\[feed32\] host spawned", text or "", re.M):
+        pass
+    # The helper's LAST run, and only when its start is there: a log with
+    # a helper respawned after a lost device holds two runs, and a tail cut
+    # to 150 KB or a report's excerpt starts somewhere in the middle - the
+    # first stamp is then not the start (gate 2.0.7).
+    run = _helper_session(htext)
+    first = (re.search(r"^(\S+)\s+\[host\]", run, re.M)
+             if _HOST_BANNER.match(run) else None)
+    lo = _clock(spawn.group(1)) if spawn else None
+    t0 = _clock(first.group(1)) if first else None
+    if lo is None or t0 is None:
+        return _same_launch(feed, host)
+    if t0 < lo - 43200:
+        t0 += 86400                        # past midnight
+    return lo - 10 <= t0 <= lo + 180
 
 
 def _gave_up_early(rep: Report, text: str, htext: str, stale: bool = False) -> bool:

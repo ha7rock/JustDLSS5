@@ -35,6 +35,21 @@ F10_CLASH = ("!! the overlay key is F10, which is also the standalone add-on's "
              "before/after key - pick another one under 'overlay key'")
 
 
+def _stopped_reason(g) -> str:
+    """Why the last install here was taken back out, from the record it left
+    holding only its reason; "" for a folder with an install, or none."""
+    try:
+        if g is None or g.installed:
+            return ""
+        man = installer._previous_manifest(Path(g.install_dir)) or {}
+        if net.ROLLED_BACK_NOTE not in (man.get("notes") or []):
+            return ""
+        return next((str(n)[len(net.STOP_NOTE):] for n in man.get("notes") or []
+                     if str(n).startswith(net.STOP_NOTE)), "it did not finish")
+    except Exception:
+        return ""
+
+
 def first_sentence(text: str, limit: int = 130) -> str:
     t = " ".join(str(text or "").split())
     for stop in (". ", "; "):
@@ -371,6 +386,7 @@ class GameControl:
             out["own_fg"] = ownfg.available()
         except Exception:
             out["own_fg"] = []
+        out["stopped"] = _stopped_reason(g)
         try:
             out["dlss_beside"] = (Path(g.install_dir) / "nvngx_dlss.dll").is_file()
         except OSError:
@@ -676,6 +692,9 @@ class GameControl:
             # the person's own frame generation files go in with OptiScaler,
             # and only a D3D12 game has DLSS frame generation to act on
             "own_fg": lambda: bool(g) and opti and api == "DX12",
+            # the way out of a chosen set, beside it
+            "own_fg_forget": lambda: self.shown_setting("own_fg")
+            and (self.settings.get("own_fg") or "") in ownfg.RECIPES,
             # api == DX11, or a game known to close itself on a ReShade DLL
             # whose API somebody has set by hand: hiding the row then forced
             # the box off (apply_route below), and the one game that must have
@@ -1135,6 +1154,7 @@ class GameControl:
     def _on_installed(self, payload) -> None:
         g, rep, route = self._job_of(payload, 3)
         here = g is not None and self.game is g
+        self._set_stopped(g, "")
         route = route or self.route
         self._idle()
         self.forget_row(g)
@@ -1170,7 +1190,8 @@ class GameControl:
         else:
             self.steps = self.route_steps(route)
         self._write_steps(self.steps)
-        self.result = {"kind": "installed", "title": "installed", "warnings": list(rep.warnings)}
+        self.result = {"kind": "installed", "warnings": list(rep.warnings),
+                       "title": "installed - not recorded" if installer.record_lost(rep) else "installed"}
         self.shell.status("install complete")
         self.refresh("game")
 
@@ -1193,6 +1214,8 @@ class GameControl:
     def _on_fail(self, payload) -> None:
         g, text = self._job_of(payload, 2)
         here = g is None or self.game is g
+        if g is not None:
+            self._set_stopped(g, _stopped_reason(g))
         self._idle()
         text = str(text)
         self.write(text, "err")
@@ -1374,6 +1397,7 @@ class GameControl:
     def _on_removed(self, payload) -> None:
         g, items = self._job_of(payload, 2)
         here = g is not None and self.game is g
+        self._set_stopped(g, "")
         self._idle()
         self.forget_row(g)
         self.dlss_reread(g)
@@ -1536,6 +1560,12 @@ class GameControl:
         self.write(f"> dlss5 add-on: your own file {Path(p).name}", "ok")
         self.refresh("game", soft=True)
 
+    def _set_stopped(self, g, why: str) -> None:
+        """The page's "the last install was taken back out" line, kept to
+        what the folder holds now (gate 2.0.7: it outlived an install)."""
+        if g is not None and self.game is g and isinstance(getattr(self, "entry", None), dict):
+            self.entry["stopped"] = why
+
     def pick_own_fg(self) -> None:
         """'add your own...' beside 'frame generation files' (#370): the
         files the person downloaded, identified, copied into the tool's own
@@ -1552,9 +1582,11 @@ class GameControl:
             ownfg.store(key, files)
         except ownfg.OwnFgError as e:
             self.write(f"[fail] frame generation files: {e}", "err")
+            self.shell.error("frame generation files", str(e))
             return
         except OSError as e:
             self.write(f"[fail] frame generation files: could not copy them ({e})", "err")
+            self.shell.error("frame generation files", f"could not copy them ({e})")
             return
         if isinstance(getattr(self, "entry", None), dict):
             have = list(self.entry.get("own_fg") or [])
@@ -1566,8 +1598,40 @@ class GameControl:
                    f"{', '.join(ownfg.dests(key))} go in with the next install", "ok")
         self.write(f"  {ownfg.UNTRIED}", "warn")
         sm = self._sm()
-        if key == "sm86" and sm and sm >= 89:
+        if key.startswith("sm86") and sm and sm >= 89:
             self.write("  this card runs DLSS frame generation itself - dlssg_for_sm86 is for RTX 30", "warn")
+        self.refresh("game", soft=True)
+
+    def forget_own_fg(self) -> None:
+        """'forget frame generation files': the tool's copy of the chosen
+        set is deleted, for every game, and the choice goes back to none. A
+        game that has them installed keeps them until its next install or
+        uninstall, which take them out (ownfg.forgotten keeps a record that
+        names the set from choosing it again)."""
+        key = self.settings.get("own_fg") or ""
+        if self.busy or key not in ownfg.RECIPES:
+            return
+        if not self.shell.ask("forget frame generation files",
+                              f"Delete the tool's copy of {ownfg.label(key)}? Every game that has "
+                              f"them installed loses them on its next install or uninstall.",
+                              ok="forget", danger=True):
+            return
+        ownfg.forget(key)
+        if isinstance(getattr(self, "entry", None), dict):
+            self.entry["own_fg"] = [k for k in (self.entry.get("own_fg") or []) if k != key]
+        self.settings["own_fg"] = ""
+        g = self.game
+        on_record = False
+        try:
+            on_record = g is not None and ownfg.recorded(
+                installer._previous_manifest(Path(g.install_dir)))[0] == key
+        except Exception:
+            pass
+        self.write(f"> frame generation files: {ownfg.label(key)} forgotten - the tool's copy is "
+                   f"deleted, for every game", "ok")
+        if on_record:
+            self.write("  they are still in this game's folder: 'update' or "
+                       "'uninstall' takes them out")
         self.refresh("game", soft=True)
 
     # ---------------------------------------------------------------- profiles
@@ -1662,7 +1726,8 @@ class GameControl:
         if vis("opti_build") and opt.opti_build in optiscaler.BUILDS:
             s["opti_build"] = opt.opti_build
         if vis("own_fg"):
-            s["own_fg"] = opt.own_fg if opt.own_fg in ownfg.RECIPES else ""
+            s["own_fg"] = (opt.own_fg if opt.own_fg in ownfg.RECIPES
+                           and not ownfg.forgotten(opt.own_fg) else "")
         if vis("opti_proxy"):
             s["opti_proxy"] = opt.opti_proxy if opt.opti_proxy in optiscaler.PROXY_NAMES else ""
         proxy = str(opt.reshade_proxy or "")

@@ -12,6 +12,52 @@ from frontend.service import BackendService, LibraryEntry
 
 
 class UpstreamTests(unittest.TestCase):
+    def test_batch_stops_when_install_record_cannot_be_saved(self):
+        from test_ui import entry
+        service = BackendService()
+        items = [entry("first", True), entry("second", True)]
+        report = installer.Report(warnings=[installer.RECORD_LOST_HEAD + "fixture"])
+        with patch.object(installer, "options_from_manifest", return_value=installer.Options()), patch.object(service, "install", return_value=report) as install:
+            with self.assertRaisesRegex(RuntimeError, "Batch update stopped"):
+                service.update_all(items, lambda *a: None)
+        self.assertEqual(install.call_count, 1)
+
+    def test_missing_components_excludes_settings_and_disabled_addons(self):
+        from core import components
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "disabled.addon64.off").write_bytes(b"fixture")
+            manifest = {"complete": True, "files": ["missing.dll", "settings.ini", "disabled.addon64", "original.dll" + installer.BACKUP_SUFFIX]}
+            self.assertEqual(components.files_gone(root, manifest), ["missing.dll"])
+
+    def test_alternative_proxy_retains_name_and_forget_clears_cache(self):
+        from core import ownfg
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            dll = root / "winmm.dll"
+            dll.write_bytes(b"dlssg_for_sm86")
+            (root / "dlssg_sm86.ini").write_text("fixture")
+            with patch.object(ownfg, "_is_x64_dll", return_value=True):
+                key, files = ownfg.identify([dll])
+            self.assertEqual(key, "sm86-winmm")
+            self.assertIn("winmm.dll", files)
+            ownfg.store(key, files)
+            self.assertIn(key, ownfg.available())
+            ownfg.forget(key)
+            self.assertTrue(ownfg.forgotten(key))
+            self.assertNotIn(key, ownfg.available())
+            ownfg.store(key, files)
+            self.assertFalse(ownfg.forgotten(key))
+
+    def test_bridge_output_is_evidence_not_claimed_visual_success(self):
+        from frontend.diagnostic_text import translate
+        text = "12:00:00.001  dlss5-bridge 1.4.12 (built fixture) attached.\n[bridge] 600 frames delivered so far."
+        run = diagnose.read_bridge(text)
+        self.assertEqual(run.frames, 600)
+        self.assertIn("至少输出 600", translate("The bridge delivered at least 600 frames in this launch."))
+        self.assertIn("无法证明", translate("The bridge delivered at least 600 frames; whether the neural pass drew them is in no log - switch the pass off and on in the Bridge panel and compare the picture."))
+
+
     def test_diagnostic_catalog_covers_pinned_static_titles_and_verdicts(self):
         import ast
         from frontend.diagnostic_text import translate

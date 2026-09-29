@@ -27,8 +27,8 @@ class CommandLineTests(unittest.TestCase):
 
     def test_new_options_reach_upstream_without_starting_gui(self):
         import autopilot_desktop
-        for build in ("y4my4my4m", "wilsjo2"):
-            args = ["JustDLSS5", "C:/fixture", "--check", "--vr", "--opti-build", build]
+        for build in ("y4my4my4m", "wilsjo2", "janblade"):
+            args = ["JustDLSS5", "C:/fixture", "--check", "--vr", "--opti-build", build, "--own-fg", "sm86-winmm"]
             with patch.object(sys, "argv", args), patch("dlss5_autopilot.main", return_value=0) as run:
                 self.assertEqual(autopilot_desktop.main(), 0)
                 run.assert_called_once()

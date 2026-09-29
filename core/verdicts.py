@@ -78,6 +78,8 @@ CHAIN = (
         "The game's DLSS call was never hooked",
     )),
     ("5 loaded, the feed never got going", "upstream", (
+        # 2.0.7: DLSS was called and the bridge's log has no frame
+        "The game called DLSS and the bridge delivered no frame",
         "Inconclusive - the feed did not get far enough",
         "Inconclusive - the add-on attached but built nothing",
         "It started and closed during start-up",
@@ -93,6 +95,10 @@ CHAIN = (
         # #390: switched on and hooked, and the game made no DLSS call
         # ("The game never called DLSS" before 2.0.6 - see RETIRED)
         "The game made no D3D12 DLSS call",
+        # 2.0.7: the bridge attached and its log has no frame line
+        "The bridge attached and delivered no frame - turn DLSS on",
+        # #127: the bridge replaced the settings the install wrote
+        "The bridge's substitute is off",
         "OptiScaler loaded; neural rendering not switched on",
         "The add-ons are loaded and the neural pass is switched off",
         "ReShade never gave it an effect runtime",
@@ -102,6 +108,11 @@ CHAIN = (
         "Add-ons loaded. Confirm in",
         "Add-ons loaded and the switch is on",
         "Frames reach the 64-bit helper, and only its own log",
+        # 2.0.7: the bridge's own log counts its frames; whether the neural
+        # pass drew them is in no log (look-in-the-overlay class, #352)
+        "; whether the neural pass drew them is in no log",
+        "The bridge attached and delivered no frame from the driver's",
+        "The bridge's log has nothing from this launch",
         # upstream: a CreateFeature/eval line and no heartbeat after it
         "DLSS was called, and no neural frame followed",
         # The report's own correction when the person said the game closed
@@ -122,6 +133,11 @@ CHAIN = (
         "its neural add-on never created the DLSS 5 feature",
         "the add-on crashed creating the feature",
         "It started, then the feed stopped",
+        # 2.0.7: the bridge's own "stopped: ..." line, or its crash handler
+        "It started, then the bridge stopped",
+        "The bridge stopped before it delivered a frame",
+        "It started, then the game crashed - see below",
+        "The game crashed before the bridge delivered a frame",
         # #420, #20: Streamline's crash handler wrote a dump on this route
         "The game crashed with OptiScaler loaded",
     )),
@@ -246,6 +262,9 @@ _PERSON_SAID_FAILED = (
     "The game closed itself and nothing here recorded why",
     "Windows recorded the game faulting - see below",
     "The game never started with this install in",
+    # #348: a ReShade d3d9.dll in front of DXVK - the route's chain was not
+    # what the game ran, whatever the picture showed (gate 2.0.6)
+    "ReShade loaded as the game's d3d9.dll in front of DXVK",
 )
 
 

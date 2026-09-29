@@ -20,6 +20,7 @@ from .model import *  # noqa: F401,F403
 from .evidence import *  # noqa: F401,F403
 from .helper import _helper_excerpt
 from .layer import _dxvk_files
+from .live import _bridge_excerpt, _bridge_text
 
 
 __all__ = [
@@ -511,7 +512,10 @@ _LOOK_IN_GAME = ("confirm in the", "check '", "the switch is on",
                  # was told to turn the upscaler on (2.0.5).
                  "not switched on", "the game's own upscaler has to be on",
                  "made no D3D12 DLSS call", "never called DLSS",
-                 "no neural frame followed")
+                 "no neural frame followed",
+                 # the bridge's frames, and the panel to compare them in
+                 "whether the neural pass drew them",
+                 "delivered no frame")
 
 
 _OVERLAY_ASK = re.compile(r"\b(open|press|check)\b[^.]{0,60}\b(overlay|panel|tab)\b",
@@ -733,6 +737,11 @@ def issue_body(version: str, gpu_name: str, sm, driver: str, game, route: str,
     # builds out of older sessions over the last one's own errors.
     parts.append(_block("ReShade.log",
                         _reshade_excerpt(_last_session(reshade)), 1500))
+    # The bridge's own log: the build, its frames and why it stopped. The
+    # replay ties it to the ReShade block above by the two logs' clocks.
+    if route == "bridge" and d is not None and (d / BRIDGE_LOG).is_file():
+        parts.append(_block(BRIDGE_LOG,
+                            _bridge_excerpt(_bridge_text(d / BRIDGE_LOG)), 900))
     # The last session, as chain.py reads it, and its deciding lines kept.
     parts.append(_block("dlss5-feed.log",
                         _keyed_lines(_last_feed_session(feed), _feed_kind, 20, 1400), 1400))

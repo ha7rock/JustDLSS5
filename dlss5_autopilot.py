@@ -5,7 +5,8 @@ Command line:   dlss5-autopilot.exe "D:\Games\Game" [--check | --remove]
                                                     [--route native|upstream|optiscaler|renodx|bridge|feeder|standalone|remix]
                                                     [--dxvk | --no-dxvk] [--remix-swap] [--vr]
                                                     [--no-gpu-pref]
-                                                    [--opti-build y4my4my4m|wilsjo2|wilsjo2-mfg]
+                                                    [--opti-build y4my4my4m|wilsjo2|wilsjo2-mfg|janblade]
+                                                    [--own-fg "D:\Downloads\version.dll" | sm86 | enabler]
                 dlss5-autopilot.exe --video ["D:\DLSS5 Player"]  the video player
 
 --dxvk runs a D3D11 game on Vulkan through DXVK, with ReShade as a Vulkan
@@ -33,8 +34,16 @@ than Dagherbou's: y4my4my4m (multi-pass, multi-frame generation),
 wilsjo2 (the neural pass before the upscaler - installed with that
 placement switched on, which is off in the fork's own default), or
 wilsjo2-mfg (the same, from that fork's RTX 40 multi-frame generation
-package; refused on a card known not to be an RTX 40). None of them has been
-run here.
+package; refused on a card known not to be an RTX 40), or janblade (a fork
+of wilsjo2's, the same placement). None of them has been run here.
+
+--own-fg applies to --route optiscaler on a D3D12 game only: frame
+generation files you downloaded yourself - dlssg_for_sm86 (its version.dll,
+with dlssg_sm86.ini beside it, or one of its alternatives\ proxies with the
+ini copied beside it) or DLSS Enabler (its version.dll). Give the path of
+the dll the first time; the tool keeps a copy, and after that its name is
+enough: sm86, sm86-winmm, sm86-dxgi, sm86-d3d12, sm86-dbghelp or enabler.
+Experimental, and out again on --remove.
 """
 from __future__ import annotations
 
@@ -71,7 +80,8 @@ def _console() -> None:
 
 def cli(target: Path, remove: bool, check: bool, route: str = "",
         dxvk: bool | None = None, game=None, remix_swap: bool = False,
-        vr: bool = False, opti_build: str = "", gpu_pref: bool = True) -> int:
+        vr: bool = False, opti_build: str = "", gpu_pref: bool = True,
+        own_fg: str = "") -> int:
     g = game or games.manual(target)
     if not g.exe:
         print(f"error: no executable found in {target}", file=sys.stderr)
@@ -142,6 +152,19 @@ def cli(target: Path, remove: bool, check: bool, route: str = "",
               f"the game will render on Vulkan and ReShade loads as a Vulkan "
               f"layer (--no-dxvk to turn this off)")
 
+    if own_fg and sup.recommended != installer.OPTI:
+        print("note    : --own-fg applies to --route optiscaler only; ignored here")
+        own_fg = ""
+    elif own_fg and g.api != "DX12":
+        # the window shows the row on D3D12 games only: DLSS frame
+        # generation is D3D12 (gate 2.0.7)
+        print(f"note    : --own-fg applies to D3D12 games only ({g.api} here); ignored")
+        own_fg = ""
+    elif own_fg:
+        from core import ownfg as _ofg
+        print(f"fg files: {_ofg.label(own_fg)} - {', '.join(_ofg.dests(own_fg))} "
+              f"({_ofg.UNTRIED})")
+
     ok, why = installer.check_supported(g)
     if check:
         # The RTX 40 MFG package on another card is refused by install()
@@ -149,6 +172,9 @@ def cli(target: Path, remove: bool, check: bool, route: str = "",
         # 2.0.5). The same check, the same words.
         refused = (optiscaler.card_refusal(opti_build, sm)
                    if ok and sup.recommended == installer.OPTI else "")
+        if ok and not refused and own_fg:
+            refused = installer._own_fg_refusal(g.install_dir, installer.Options(
+                path=sup.recommended, own_fg=own_fg))
         print(f"installed: {'yes' if g.installed else 'no'}")
         print(f"status   : {refused or ('ready' if ok else why)}")
         # The one mode whose whole job is "look, write nothing" was the one
@@ -164,7 +190,7 @@ def cli(target: Path, remove: bool, check: bool, route: str = "",
             popt = installer.Options(path=sup.recommended,
                                      native_dlss=sup.native_dlss, dxvk=use_dxvk, vr=vr, opti_build=opti_build,
                                      upscaler=sup.upscaler,
-                                     remix_swap=remix_swap, gpu_pref=gpu_pref)
+                                     remix_swap=remix_swap, gpu_pref=gpu_pref, own_fg=own_fg)
             print(f"plan     : {' -> '.join(installer.plan(g, popt))}")
             # ...and what the MFG package needs from the game, which only
             # the finished install used to say.
@@ -188,13 +214,16 @@ def cli(target: Path, remove: bool, check: bool, route: str = "",
         rep = installer.install(
             g, installer.Options(path=sup.recommended, native_dlss=sup.native_dlss,
                                  dxvk=use_dxvk, vr=vr, opti_build=opti_build, upscaler=sup.upscaler,
-                                 remix_swap=remix_swap, gpu_pref=gpu_pref),
+                                 remix_swap=remix_swap, gpu_pref=gpu_pref, own_fg=own_fg),
             on_log=print,
             on_prog=lambda p, m: print(f"\r  {p:3d}%  {m:<60}", end="", flush=True))
     except installer.InstallError as e:
         print(f"\nerror: {e}", file=sys.stderr)
         return 1
-    print(f"\n\nDone - {len(rep.written)} files written.")
+    if installer.record_lost(rep):
+        print(f"\n\nInstalled, but no record was saved - {len(rep.written)} files written.")
+    else:
+        print(f"\n\nDone - {len(rep.written)} files written.")
     for w in rep.warnings:
         print(f"  ! {w}")
     # The remix route has no ReShade overlay at all - its settings live in
@@ -233,6 +262,7 @@ def main() -> int:
         args.remove(route)
     opti_build = ""
     if "--opti-build" in args and args.index("--opti-build") + 1 < len(args):
+        _console()      # the exe has no console of its own; errors below need one
         opti_build = args[args.index("--opti-build") + 1]
         args.remove(opti_build)
         from core import optiscaler as _opti
@@ -243,6 +273,32 @@ def main() -> int:
         if route and route != "optiscaler":
             print("note: --opti-build applies to --route optiscaler only; "
                   "ignored here", file=sys.stderr)
+    own_fg = ""
+    if "--own-fg" in args:
+        _console()
+        if args.index("--own-fg") + 1 >= len(args):
+            print("error: --own-fg takes the path of the .dll you downloaded, or a name "
+                  "you used before", file=sys.stderr)
+            return 2
+        picked = args[args.index("--own-fg") + 1]
+        args.remove(picked)
+        # a set's name in any case (SM86); anything else is a path
+        if picked.lower() in __import__("core.ownfg", fromlist=["RECIPES"]).RECIPES:
+            picked = picked.lower()
+        from core import ownfg as _ofg
+        try:
+            if picked in _ofg.RECIPES:
+                if not _ofg.stored(picked):
+                    raise _ofg.OwnFgError(
+                        f"no copy of {_ofg.label(picked).split(' (')[0]} is stored yet - give the "
+                        f"path of the .dll you downloaded")
+                own_fg = picked
+            else:
+                own_fg, files = _ofg.identify([Path(picked)])
+                _ofg.store(own_fg, files)
+        except (_ofg.OwnFgError, OSError) as e:
+            print(f"error: --own-fg: {e}", file=sys.stderr)
+            return 2
     positional = [a for a in args if not a.startswith("-")]
     if "--video" in args:
         _console()
@@ -267,6 +323,7 @@ def main() -> int:
                    route=route,
                    vr="--vr" in args,
                    opti_build=opti_build,
+                   own_fg=own_fg,
                    dxvk=(True if "--dxvk" in args
                          else False if "--no-dxvk" in args else None),
                    remix_swap="--remix-swap" in args,

@@ -133,6 +133,52 @@ def _proxy_gone(root: Path, man: dict) -> bool:
         return False
 
 
+# Files the install writes that a person or the game may lose without the
+# install being damaged: ReShade and the add-ons write them again on the next
+# start, and the tool's own switches rename them.
+_REGENERATED = (".log", ".ini", ".cfg", ".txt", ".json", ".md", ".off")
+
+
+def files_gone(root: Path, man: dict) -> list[str]:
+    """Files the record says this install wrote that are no longer in the folder.
+
+    A game update or 'verify files' takes everything it does not know about
+    out of the folder, and nothing said so: the game started, no add-on
+    loaded, and the report said 'nothing we wrote ever loaded'. Read off the
+    folder against the record, so it holds whatever removed them.
+
+    Not damage, so not listed: a record that is not complete (a failed or
+    half-removed install has its own answers), backups of the game's own
+    files, files the components write again, and an add-on the tool itself
+    switched off (its name with '.off' on the end).
+    """
+    from . import installer, net
+    if not man or not man.get("complete", True):
+        return []
+    if net.ROLLED_BACK_NOTE in (man.get("notes") or []):
+        return []
+    skip = _REGENERATED + (installer.BACKUP_SUFFIX,
+                           installer.SIDELINE_SUFFIX) + installer.LEGACY_BACKUP_SUFFIXES
+    out = []
+    listed = man.get("files")
+    for rel in listed if isinstance(listed, list) else []:
+        if not isinstance(rel, str) or not rel or rel.endswith(("/", "\\")) or rel.lower().endswith(skip):
+            continue
+        try:
+            if (root / rel).exists() or (root / (rel + ".off")).exists():
+                continue
+        except OSError:
+            continue
+        out.append(rel)
+    return out
+
+
+def _gone_item(gone: list[str]) -> Item:
+    names = ", ".join(gone[:3]) + (f" and {len(gone) - 3} more" if len(gone) > 3 else "")
+    return Item("files in the game folder", f"{len(gone)} missing", "install again", True,
+                note=f"the folder no longer has {names} - install again")
+
+
 def check(root: Path) -> list[Item]:
     """What is installed in this folder against what is current.
 
@@ -149,8 +195,9 @@ def check(root: Path) -> list[Item]:
             if m and m.group(1) in LABELS:
                 have[m.group(1)] = m.group(2).strip()
 
+    gone = files_gone(root, man)
     if not have:
-        return []
+        return [_gone_item(gone)] if gone else []
 
     out: list[Item] = []
     for name, installed in have.items():
@@ -246,6 +293,11 @@ def check(root: Path) -> list[Item]:
         else:
             outdated = (latest != installed and _key(latest) > _key(installed))
         out.append(Item(LABELS.get(name, name), installed, latest, outdated))
+    # The proxy has its own line above; do not count the same file twice.
+    if any(i.note.startswith("the proxy this install wrote") for i in out):
+        gone = [f for f in gone if f != str(man.get("proxy") or "")]
+    if gone:
+        out.append(_gone_item(gone))
     return out
 
 

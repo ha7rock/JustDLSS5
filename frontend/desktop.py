@@ -645,6 +645,9 @@ class MainWindow(QMainWindow):
         self.own_fg_add = button(self.t("添加自备文件…", "Add local files…"), self.pick_own_fg)
         form.addRow(self.t("自备补帧文件（实验性）", "Local frame generation (experimental)"), self.own_fg)
         form.addRow(self.own_fg_add)
+        self.own_fg_forget = button(self.t("清除自备文件…", "Forget local files…"), self.forget_own_fg)
+        form.addRow(self.own_fg_forget)
+        self.own_fg.currentIndexChanged.connect(self._own_fg_changed)
         self.gpu_preference = QCheckBox(self.t("使用 NVIDIA 显卡（Windows 设置）", "Use NVIDIA GPU (Windows setting)"))
         self.gpu_preference.setToolTip(self.t("安装时设置此游戏的高性能显卡偏好；保留已有选择，卸载时还原本工具的设置。", "Sets this game's high-performance GPU preference on install; preserves existing choices and restores ours on uninstall."))
         form.addRow(self.gpu_preference)
@@ -686,6 +689,7 @@ class MainWindow(QMainWindow):
             "": self.t("Dagherbou（默认）", "Dagherbou (default)"),
             "y4my4my4m": self.t("y4my4my4m · RTX 40 多帧生成", "y4my4my4m · RTX 40 MFG"),
             "wilsjo2-mfg": self.t("wilsjo2 · PreSR + RTX 40 多帧生成（实验性）", "wilsjo2 · PreSR + RTX 40 MFG (experimental)"),
+            "janblade": self.t("Janblade · PreSR（实验性，未实测）", "Janblade · PreSR (experimental, untested)"),
             "wilsjo2": self.t("wilsjo2 · PreSR（实验性，未实测）", "wilsjo2 · PreSR (experimental, untested)"),
         }
         for key, description in optiscaler.BUILDS.items():
@@ -1170,9 +1174,9 @@ class MainWindow(QMainWindow):
         self.own_fg.addItem(self.t("无", "None"), "")
         from .backend import ownfg
         for key in dict.fromkeys([*(self.inspection.own_fg_available if self.inspection else []), options.own_fg]):
-            if key:
+            if key and not ownfg.forgotten(key):
                 self.own_fg.addItem(ownfg.label(key), key)
-        self._combo(self.own_fg, options.own_fg)
+        self._combo(self.own_fg, "" if ownfg.forgotten(options.own_fg) else options.own_fg)
         self.vr_check.setChecked(options.vr)
         for combo, value in ((self.provider_combo, options.provider), (self.preset_combo, options.feed.get("preset", next(iter(feedcfg.PRESETS)))),
                              (self.hdr_combo, options.feed.get("hdr", next(iter(feedcfg.HDR)))), (self.proxy_combo, options.reshade_proxy),
@@ -1189,12 +1193,40 @@ class MainWindow(QMainWindow):
         self._local_addon_label()
         self._route_changed()
 
+    def _own_fg_changed(self):
+        self.own_fg_forget.setVisible(bool(self.own_fg.currentData()))
+        self.own_fg_forget.setEnabled(self.own_fg.isEnabled() and not self.busy_job)
+
+    def forget_own_fg(self):
+        from .backend import ownfg
+        key = self.own_fg.currentData()
+        if self.busy_job or self._game_tool_busy() or key not in ownfg.RECIPES:
+            return
+        if QMessageBox.question(self, self.t("清除自备文件", "Forget local files"), self.t(
+                "删除应用保存的这组补帧文件？此操作影响所有游戏。游戏中的文件会在下次重新安装或卸载组件时移除。",
+                "Delete this set of cached frame generation files for all games? Installed copies remain until each game's next reinstall or uninstall.")) != QMessageBox.StandardButton.Yes:
+            return
+        def work(emit):
+            ownfg.forget(key)
+            if ownfg.stored(key) or not ownfg.forgotten(key):
+                raise OSError("清除未完成，请检查文件权限。 / Could not clear files; check permissions.")
+        def ready(_):
+            index = self.own_fg.findData(key)
+            if index >= 0:
+                if self.own_fg.currentData() == key:
+                    self._combo(self.own_fg, "")
+                self.own_fg.removeItem(index)
+            if self.inspection:
+                self.inspection.own_fg_available = [k for k in self.inspection.own_fg_available if k != key]
+            self.status.setText(self.t("已清除缓存；游戏中的副本会在重新安装或卸载时移除。", "Cache cleared; installed copies are removed on reinstall or uninstall."))
+        self._submit(work, ready, busy=True, title=self.t("正在清除文件…", "Clearing files…"), controls=(self.own_fg_forget,))
+
     def pick_own_fg(self):
         if self.busy_job or self._game_tool_busy():
             return
         from .backend import ownfg
         selected_key = self.current.key if self.current else None
-        paths, _ = QFileDialog.getOpenFileNames(self, self.t("选择自备 version.dll 及配套 ini", "Select your version.dll and accompanying ini"), "", "DLL / INI (*.dll *.ini)")
+        paths, _ = QFileDialog.getOpenFileNames(self, self.t("选择自备补帧 DLL 及配套 ini", "Select frame generation DLL and accompanying ini"), "", "DLL / INI (*.dll *.ini)")
         if not paths:
             return
         def work(emit):
@@ -1308,6 +1340,7 @@ class MainWindow(QMainWindow):
         self.opti_proxy.setEnabled(route == dlss.OPTI)
         self.own_fg.setEnabled(route == dlss.OPTI and self.current.game.api == "DX12")
         self.own_fg_add.setEnabled(self.own_fg.isEnabled())
+        self._own_fg_changed()
         self.opti_build.setEnabled(route == dlss.OPTI)
         for index in range(self.opti_build.count()):
             key = self.opti_build.itemData(index)
@@ -1437,6 +1470,13 @@ class MainWindow(QMainWindow):
         self._submit(lambda emit: bool(entry.game.installed), ready)
 
     def _installed(self, entry, report):
+        from .backend import installer
+        if installer.record_lost(report):
+            self._refresh_install_status(entry)
+            self._append_log("\n".join(report.warnings))
+            self.status.setText(self.t("安装记录未保存，请查看恢复说明。", "Installation record missing; review recovery instructions."))
+            self.show_text(self.t("需要手动恢复", "Manual recovery required"), "\n".join(report.warnings))
+            return
         entry.installed = True
         self.model.refresh()
         self._route_changed()

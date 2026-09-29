@@ -68,6 +68,32 @@ class DesktopTests(unittest.TestCase):
         self.window._route_changed()
         self.assertEqual(self.window._options().own_fg, "")
 
+    def test_forgotten_frame_generation_is_not_reselected_from_manifest(self):
+        self.select_game()
+        with patch("core.ownfg.forgotten", return_value=True):
+            self.window._apply_options(installer.Options(path=dlss.OPTI, own_fg="sm86"))
+        self.assertEqual(self.window._options().own_fg, "")
+        self.assertTrue(self.window.own_fg_forget.isHidden())
+        self.assertGreaterEqual(self.window.opti_build.findData("janblade"), 0)
+
+    def test_forget_frame_generation_cancel_has_no_effect(self):
+        from PySide6.QtWidgets import QMessageBox
+        self.select_game()
+        self.window._apply_options(installer.Options(path=dlss.OPTI, own_fg="sm86"))
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No), patch("core.ownfg.forget") as forget:
+            self.window.forget_own_fg()
+        forget.assert_not_called()
+        self.assertEqual(self.window.own_fg.currentData(), "sm86")
+
+    def test_record_loss_is_not_presented_as_success(self):
+        self.select_game()
+        report = installer.Report(warnings=[installer.RECORD_LOST_HEAD + "fixture"])
+        with patch.object(self.window, "show_text") as show:
+            self.window._installed(self.window.current, report)
+            self.drain()
+        self.assertIn("恢复", show.call_args.args[0])
+        self.assertFalse(self.window.current.installed)
+
     def test_failed_install_refreshes_rolled_back_state(self):
         self.select_game()
         self.window.current.installed = True

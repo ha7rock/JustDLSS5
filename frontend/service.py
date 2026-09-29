@@ -250,6 +250,8 @@ class BackendService:
             if options is None:
                 continue
             emit("log", entry.game.name)
-            self.install(entry, options, emit)
+            report = self.install(entry, options, emit)
+            if installer.record_lost(report):
+                raise RuntimeError("批量更新已停止：安装记录未保存。 / Batch update stopped: installation record could not be saved.\n" + "\n".join(report.warnings))
             count += 1
         return count

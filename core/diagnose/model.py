@@ -23,7 +23,11 @@ from pathlib import Path
 
 
 __all__ = [
-    "BAD", "FEED_LOG", "FEED_SHADERS", "Finding",
+    "BAD", "BRIDGE_LOG", "FEED_LOG", "FEED_SHADERS", "Finding",
+    "_BRIDGE_ATTACHED", "_BRIDGE_CALLED", "_BRIDGE_CREATE_FAILED", "_BRIDGE_CRASH",
+    "_BRIDGE_FAILED", "_BRIDGE_FAULTED",
+    "_BRIDGE_FRAME",
+    "_BRIDGE_REGISTERED", "_BRIDGE_STATS", "_BRIDGE_STOPS",
     "HOST_LOG", "INFO", "LEGACY_MANIFESTS", "MANIFEST",
     "NATIVE_ADDON_NAME", "OK", "OPTI_LOG", "PROVIDER_FX",
     "RESHADE_LOG", "RR_RUNTIME", "Report", "STANDALONE_ADDON_NAME",
@@ -49,6 +53,67 @@ HOST_LOG = Path("host64") / "dlss5-feed-host.log"
 
 
 RESHADE_LOG = "ReShade.log"
+
+
+# The bridge's own log, beside the add-on, emptied when it attaches: one
+# launch per file. Every pattern below is a format string in the released
+# dlss5-bridge.addon64 (1.4.11 and 1.4.12 read byte for byte), and every
+# line starts with its "%02u:%02u:%02u.%03u  " clock. Numbers from %.1f are
+# read with a comma as well: a C++ add-on's locale is not ours (#69).
+BRIDGE_LOG = "dlss5-bridge.log"
+_BRIDGE_ATTACHED = re.compile(
+    r"^(\d\d:\d\d:\d\d\.\d{3})\s+dlss5-bridge (\S+) \(built [^)\n]*\) attached\.", re.M)
+# "[bridge] frame %llu delivered (%ux%u)" at frame 1 and every 1800, the
+# synthetic path's D3D12 and Vulkan spellings, CountDelivered's
+# "[bridge] %ld frames delivered so far." every 600 (the running count), and
+# the Vulkan mirror's "[vkmirror] frame %llu recorded (...)" - that path
+# writes no "delivered" line of its own (gate 2.0.7).
+_BRIDGE_FRAME = re.compile(
+    r"\[(?:bridge|synth)\] (?:(?:D3D12 |Vulkan )?frame (\d+) delivered"
+    r"|(\d+) frames delivered so far\.)|\[vkmirror\] frame (\d+) recorded")
+# The game called DLSS in this launch: a feature was built or refused, an
+# evaluate failed, or the unload summary counted evaluates. "Turn DLSS on"
+# is the wrong answer to a log with any of these (gate 2.0.7).
+_BRIDGE_CALLED = re.compile(
+    r"\[bridge\] (?:evaluate failed with result|CreateFeature failed with result"
+    r"|feature ready)|EvaluateFeature calls: [1-9]|\[vkmirror\] frame \d+ recorded")
+# NGX's answer when it would not build the game's feature; the bridge goes on
+# without a "stopped:" line (bridge.inc CreateFeature).
+_BRIDGE_CREATE_FAILED = re.compile(
+    r"\[bridge\] CreateFeature failed with result (0x[0-9A-Fa-f]{8}), (\S+)")
+# "[bridge] %.0f frames: bridge CPU %.2f ms/frame | frame interval %.2f ms (%.1f fps)"
+_BRIDGE_STATS = re.compile(
+    r"\[bridge\] (\d+) frames: bridge CPU [\d.,]+ ms/frame \| frame interval "
+    r"[\d.,]+ ms \(([\d.,]+) fps\)")
+# The lines after which the bridge delivers nothing more, and the reason
+# each gives. "stopped: %s. The game renders normally" is BridgeDisable's
+# own line - every way the bridge turns itself off goes through it.
+_BRIDGE_STOPS = (
+    re.compile(r"stopped: (.+?)\. The game renders normally"),
+    re.compile(r"\[bridge\] (evaluate raised exception 0x[0-9A-Fa-f]{8}) -- disabling"),
+    re.compile(r"\[synth\] (the D3D12 evaluate raised exception 0x[0-9A-Fa-f]{8}) "
+               r"after \d+ delivered frames"),
+    re.compile(r"\[synth\] (?:optical flow: )?(the (?:driver's optical flow engine"
+               r"|session on the private D3D11 device) has stopped)"),
+    # VkmRefuse: the Vulkan mirror stands down for the rest of the session
+    # and forwards the game's own DLSS; it never goes through BridgeDisable.
+    re.compile(r"\[vkmirror\] (.+?)\. The game's own DLSS was forwarded"),
+)
+# A fault that stops nothing on its own: three in a row turn the bridge off,
+# and that is said with the "stopped:" line above.
+_BRIDGE_FAILED = re.compile(r"\[bridge\] evaluate failed with result (0x[0-9A-Fa-f]{8}), (\S+)")
+# "[bridge]   it faulted in %ls" / "[synth]   it faulted in %ls": the module
+# that owned the faulting address, logged just before the stop it caused.
+_BRIDGE_FAULTED = re.compile(r"\[(?:bridge|synth)\]\s+it faulted in ([^\r\n]+)")
+# The crash handler's block, written in the launch it happened in. The next
+# launch reprints it without this marker, under "The previous run crashed".
+_BRIDGE_CRASH = re.compile(r"### CRASH RECORDED ###[^\n]*\n(?:[^\n]*\n){0,3}?"
+                           r"[^\n]*exception (0x[0-9A-Fa-f]{8})[^\n]*\n"
+                           r"(?:[^\n]*\bin: ([^\n]+))?")
+# ReShade's own line for the bridge add-on, which ties the bridge's log to
+# ReShade's session: the bridge writes "attached." just after it registers.
+_BRIDGE_REGISTERED = re.compile(
+    r"^(\d\d:\d\d:\d\d[:.]\d{3})[^\n]*Registered add-on \"DLSS 5 Bridge", re.M)
 
 
 MANIFEST = "dlss5-autopilot.json"

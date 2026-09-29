@@ -223,6 +223,10 @@ class GamePage(Page):
                               + (f"  \u00b7  {v['fps']} fps" if v.get("ok") and v.get("fps") else "")))
             elif g.installed:
                 lines.append((T.MUTED, "installed"))
+            elif (getattr(a, "entry", {}) or {}).get("stopped"):
+                # the failed first install, taken back out: its reason
+                lines.append((T.WARN, "the last install was taken back out: "
+                                      + str(a.entry["stopped"])))
         for colour, text in lines:
             dot = colour in (T.OK, T.WARN, T.AMBER)
             x = pad
@@ -399,7 +403,8 @@ class GamePage(Page):
         rows = getattr(a, "others", None) if getattr(a, "others_for", None) == str(g.install_dir) else None
         if rows and rows[0][1]:
             best = rows[0]
-            items.append(("people", f"{best[1]} of {best[2]} worked with {best[0]}", accent,
+            from ..community import route_name
+            items.append(("people", f"{best[1]} of {best[2]} worked with {route_name(best[0])}", accent,
                           lambda: self.shell.scroll_to(self._others_y - T.px(80)) if hasattr(self, "_others_y")
                           else None))
         # what the watcher really does for this game: only installed games are
@@ -636,7 +641,9 @@ class GamePage(Page):
         measured = (entry or {}).get("measured")
         measured = measured if isinstance(measured, dict) else {}
         for i, (route, ok, n) in enumerate(rows[:5]):
-            c.create_text(pad, y, text=route, font=T.mono(9), fill=T.MUTED, anchor="w", tags=tags)
+            from ..community import route_name
+            c.create_text(pad, y, text=T.fit(route_name(route), T.mono(9), T.px(146)), font=T.mono(9),
+                          fill=T.MUTED, anchor="w", tags=tags)
             bx = pad + T.px(150)
             c.create_rectangle(bx, y - T.px(3), bx + bw, y + T.px(3), fill=T.SURF2, outline="", tags=tags)
             c.create_rectangle(bx, y - T.px(3), bx + bw * ok / max(1, n), y + T.px(3),

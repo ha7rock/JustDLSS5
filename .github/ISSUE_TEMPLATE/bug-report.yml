@@ -82,6 +82,6 @@ body:
     id: logs
     attributes:
       label: 诊断与相关日志 / Diagnosis and relevant logs
-      description: 从“任务与日志”复制相关片段；无法获取请注明。不要上传整个游戏目录。/ Paste relevant, redacted excerpts; explain if unavailable.
+      description: 从诊断的“原始记录”或“任务与日志”复制相关片段；Bridge 问题请保留 dlss5-bridge.log 片段。提交前隐去个人路径；无法获取请注明。/ Paste redacted diagnosis or activity excerpts; include dlss5-bridge.log for Bridge issues.
     validations:
       required: true

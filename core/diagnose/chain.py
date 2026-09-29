@@ -22,6 +22,7 @@ from .evidence import *  # noqa: F401,F403
 from .process import *  # noqa: F401,F403
 from .process import _route_owns
 from .helper import *  # noqa: F401,F403
+from .live import *  # noqa: F401,F403
 from .routes import *  # noqa: F401,F403
 from .body import *  # noqa: F401,F403
 
@@ -614,6 +615,9 @@ def _analyse(install_dir: Path, last_error: str, foreign: list) -> Report:
     stale_reshade = bool(rtext) and bool(since) and not _fresh(reshade, since)
     if stale_reshade and not (text or htext):
         rtext = ""
+    # The bridge's own log, only when its clock puts it in ReShade's last
+    # session (live.py): a launch without the bridge leaves the older one.
+    brun = bridge_run(install_dir, rtext) if rep.route == "bridge" else None
 
     for p, t in ((feed, text), (reshade, rtext), (host, htext)):
         if t:
@@ -891,7 +895,8 @@ def _analyse(install_dir: Path, last_error: str, foreign: list) -> Report:
         # its "600 frames: feed CPU" line are frames drawn and shipped (#482
         # was told it closed before drawing, beside 1200 frames fed).
         drew = bool(re.search(r"frame \d+ (?:delivered|evaluated)|first frame fed"
-                              r"|\d+ frames: feed CPU", text or ""))
+                              r"|\d+ frames: feed CPU", text or "")) \
+            or bool(brun and brun.frames)
         if "Registered add-on" in rtext and "Exiting" in rtext \
                 and "CreateSwapChain" not in rtext and "Presenting" not in rtext \
                 and "vkCreateSwapchainKHR" not in rtext \
@@ -1289,7 +1294,8 @@ def _analyse(install_dir: Path, last_error: str, foreign: list) -> Report:
     # it: #252's helper logged "feature ready" and the picture was frozen,
     # and one delivered frame in the feed log would have read "Working.".
     # Only its log from the same launch speaks.
-    if htext and _same_launch(feed, host) and (not since or _fresh(host, since)) \
+    if htext and _helper_same_launch(text, htext, feed, host) \
+            and (not since or _fresh(host, since)) \
             and _helper_verdict(rep, htext):
         return rep
     crash = re.search(r"CreateFeature raised exception (0x[0-9A-Fa-f]+)", joined)
@@ -1381,6 +1387,8 @@ def _analyse(install_dir: Path, last_error: str, foreign: list) -> Report:
                 f"session may have had nothing to run the model on - the "
                 f"add-on's panel in the game says for certain.")
 
+    bridged = False                 # the bridge's own log gave the verdict
+    sub_off = False                 # #127: the bridge replaced our settings
     if crash:
         rep.add(BAD, f"Creating the DLSS feature crashed ({crash.group(1)}).",
                 "The add-on and the nvngx_dlssnr build disagree. Nothing the "
@@ -1455,26 +1463,38 @@ def _analyse(install_dir: Path, last_error: str, foreign: list) -> Report:
         # been read as theirs.
         switch = (_addon_switch(install_dir, rep)
                   if rep.route in ("native", "bridge") else "")
-        rep.add(INFO, "This route leaves no frame log of its own.",
-                (f"Open the ReShade overlay and check the {panel}: it shows "
-                 f"the live state, frame by frame.") if switch else
-                (f"Open the ReShade overlay and check the {panel}: it shows "
-                 f"the live state and whether it is switched on."))
+        # The bridge does log its frames, in a file of its own that nothing
+        # read before 2.0.7 - said below when this launch's copy is there.
+        if brun is None and rep.route == "bridge":
+            # 2.0.7 reads the bridge's own log: absent here, or another launch's
+            rep.add(INFO, f"{BRIDGE_LOG} has nothing from this launch.",
+                    f"The bridge did not load, or the file is from an earlier "
+                    f"launch. Open the ReShade overlay and check the {panel}: "
+                    f"it shows the live state.")
+        elif brun is None:
+            rep.add(INFO, "This route leaves no frame log of its own.",
+                    (f"Open the ReShade overlay and check the {panel}: it shows "
+                     f"the live state, frame by frame.") if switch else
+                    (f"Open the ReShade overlay and check the {panel}: it shows "
+                     f"the live state and whether it is switched on."))
         if rep.route == "upstream":
             rep.add(INFO, "If the picture only gets darker, switch the route "
                           "to native.",
                     "neural-upstream normalises the frame against the game's "
                     "exposure buffer, and some games do not expose one; the "
                     "native route runs after the game's own tone mapping.")
+        nolog = ("The bridge's log has nothing from this launch"
+                 if rep.route == "bridge" else "This route logs no frames")
         rep.verdict = (
             "The add-ons are loaded and the neural pass is switched off in "
             "the add-on itself - turn it on in the overlay."
             if switch == "off" else
-            f"Add-ons loaded and the switch is on. This route logs no "
-            f"frames, so the {panel} is the only live picture."
+            f"Add-ons loaded and the switch is on. {nolog}, so the "
+            f"{panel} is the only live picture."
             if switch == "on" else
-            f"Add-ons loaded. Confirm in the {panel} - this "
-            f"route does not log frames.")
+            f"Add-ons loaded. Confirm in the {panel} - "
+            + ("the bridge's log has nothing from this launch." if rep.route == "bridge"
+               else "this route does not log frames."))
         # Half of that confirmation is a fact we already have.
         _loaded_note(install_dir, man, rep)
         if rep.route == "bridge" and man.get("native_dlss") is False:
@@ -1502,6 +1522,19 @@ def _analyse(install_dir: Path, last_error: str, foreign: list) -> Report:
                         "Install the bridge route again.")
                 rep.verdict = ("The bridge's substitute is off - install the "
                                "bridge route again.")
+                sub_off = True
+        if brun is not None:
+            # Frames the bridge delivered, or the line it stopped on, in the
+            # launch ReShade's session describes. A switch turned off in the
+            # add-on still comes first: it is the one thing to change.
+            was = rep.verdict
+            bridged = _bridge_verdict(rep, brun, panel, rtext,
+                                      synthetic=man.get("native_dlss") is False)
+            # The one thing to change stays the headline: the add-on's
+            # switch off, or the substitute the bridge replaced (#127) -
+            # unless the bridge's own log shows it stopped (gate 2.0.7).
+            if switch == "off" or (sub_off and not (brun.stop or brun.crashed)):
+                rep.verdict, bridged = was, False
     else:
         # A log that stops at the hooks it installed is not "did not get far
         # enough" in some vague way: everything the feed can say about the
@@ -1542,6 +1575,9 @@ def _analyse(install_dir: Path, last_error: str, foreign: list) -> Report:
         else:
             rep.verdict = "Inconclusive - the feed did not get far enough to tell."
 
-    if rs_verdict and not rep.verdict.startswith("Working"):
+    # Frames the bridge delivered say the game drew with the device this
+    # install set up, so the D3D9 answers do not replace what it said.
+    if rs_verdict and not rep.verdict.startswith("Working") \
+            and not (bridged and brun is not None and brun.frames):
         rep.verdict = rs_verdict
     return rep

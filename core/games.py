@@ -24,6 +24,35 @@ MARKER_FILES = ("dlss5-feed.addon64", "dlss5-feed.addon32",
                 "dlss5kur-kurulum.json", "dlss5-installer.json")
 
 
+_ROLLED: dict = {}
+
+
+def _rolled_back(record: Path) -> bool:
+    """A record a failed fresh install left holding only its reason (2.0.6).
+
+    Nothing of that install is in the folder, so it is not an install: the
+    library showed "play" and "uninstall" over a folder the rollback had
+    already put back. Cached on the file's time - the library asks for
+    every game on every refresh."""
+    try:
+        st = record.stat()
+    except OSError:
+        return False
+    key = (str(record), st.st_mtime_ns, st.st_size)
+    if key not in _ROLLED:
+        from .net import ROLLED_BACK_NOTE
+        # A record is written by older builds too: any shape it has must
+        # read as "installed", never raise out of the library (gate 2.0.7).
+        try:
+            data = json.loads(record.read_text(encoding="utf8"))
+            notes = data.get("notes") if isinstance(data, dict) else None
+            _ROLLED[key] = (isinstance(notes, list) and ROLLED_BACK_NOTE in notes
+                            and not (data.get("files") or data.get("dosyalar")))
+        except Exception:
+            _ROLLED[key] = False
+    return _ROLLED[key]
+
+
 def _isdir(p) -> bool:
     """Path.is_dir() that survives a drive letter Windows will not talk about.
 
@@ -137,9 +166,10 @@ class Game:
         it.
         """
         d = self.install_dir
-        if any((d / m).is_file() for m in MARKER_FILES if m.endswith(".json")):
+        records = [d / m for m in MARKER_FILES if m.endswith(".json")]
+        if any(p.is_file() and not _rolled_back(p) for p in records):
             return True
-        if not any((d / m).is_file() for m in MARKER_FILES):
+        if not any((d / m).is_file() for m in MARKER_FILES if not m.endswith(".json")):
             return False
         loaders = ("dxgi.dll", "d3d11.dll", "d3d12.dll", "d3d9.dll", "d3d10.dll",
                    "opengl32.dll", "winmm.dll", "version.dll", "dbghelp.dll",
