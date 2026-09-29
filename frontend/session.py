@@ -143,6 +143,10 @@ def analyse(entry, target=0, started=""):
                     result.resolution = recommended
         else:
             lines.append("日志中没有足够的性能数据。 / No usable performance measurements in the logs.")
+    if route == "bridge":
+        excerpt = diagnose._bridge_excerpt(diagnose._bridge_text(folder / diagnose.BRIDGE_LOG))
+        if excerpt:
+            lines.append("dlss5-bridge.log（原始片段 / original excerpt）\n" + "\n".join(excerpt))
     result.text = "\n\n".join(lines)
     return result
 

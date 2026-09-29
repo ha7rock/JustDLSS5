@@ -48,6 +48,11 @@ GROUPS = (
          "dashdogy's RTX40MFG-Unlock with the Ultimate ASI Loader - research software"),
         ("own_fg", "frame generation files", "dd",
          "RTX 30: dlssg_for_sm86; RTX 20/30: DLSS Enabler - downloaded by you; experimental, out again on uninstall"),
+        # its own row: beside 'add your own...' it did not fit at common
+        # window widths (gate 2.0.7), and it shows only with a set chosen
+        ("own_fg_forget", "forget frame generation files", "action",
+         "deletes the tool's copy of the chosen files, for every game; each game's next install or "
+         "uninstall takes them out of that game's folder"),
         ("dxvk", "run through DXVK (Vulkan)", "toggle",
          "for games that close when ReShade loads inside them; DirectX 8 and 9 always go through DXVK"),
         ("vr", "VR headset (OpenXR layer)", "toggle", "registers ReShade's OpenXR layer so the pass runs on what the "
@@ -167,6 +172,11 @@ class SettingsSection:
                 k.link(x + w, y, "add your own...", a.pick_own_fg, glyph="file", colour=T.DIM, anchor="e",
                        tags=tags, size=8)
             return T.px(74)
+        if kind == "action":
+            k.link(x, y + T.px(14), label,
+                   (lambda: None if a.busy else a.forget_own_fg()) if key == "own_fg_forget" else None,
+                   glyph="trash", colour=T.DIM if busy else T.MUTED, tags=tags, size=9, tip=tip)
+            return T.px(46)
         if kind == "toggle":
             t = k.toggle(x, y + T.px(14), label, bool(a.settings.get(key)),
                          lambda v, key=key: a.set_setting(key, v), tags=tags, enabled=not busy, accent=accent,

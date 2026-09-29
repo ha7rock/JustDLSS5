@@ -57,7 +57,7 @@ API = "https://api.github.com/repos/Dagherbou/OptiScaler_DLSSNR/releases/latest"
 # answer and no second chance: if that release carries something other than
 # an OptiScaler package - which is exactly what happened on the fork's page
 # (#364) - the whole route would refuse to install rather than take the
-# release before it, the way both forks already do.
+# release before it, the way every fork here already does.
 LIST_API = ("https://api.github.com/repos/Dagherbou/OptiScaler_DLSSNR/"
             "releases?per_page=10")
 
@@ -88,6 +88,15 @@ PRESR_MFG = "wilsjo2-mfg"
 # the GUI's settings dict: it belongs to the build, not to a preference.
 PRESR_BEFORE_SR = {"RunBeforeSR": True}
 
+# Janblade's fork of wilsjo2's fork (#561): the same pre-SR placement and the
+# same OptiScaler.ini keys, one zip per release with only OptiScaler.dll
+# changed. Its newest release is often flagged pre-release; like every fork
+# here the pick ignores that flag. Offered and labelled as not run here,
+# never chosen automatically.
+JANBLADE_API = ("https://api.github.com/repos/Janblade/"
+                "OptiScaler-F5-DLSSNR-Multipass/releases?per_page=10")
+JANBLADE = "janblade"
+
 # Every fork publishes on its own release page, in the same shape: pick the
 # newest release that carries an OptiScaler PACKAGE (see PACKAGE_WORD - a
 # release page can carry a different program of its author's, #364). The
@@ -103,6 +112,8 @@ FORKS = {
     # optional RTX 40 MFG unlock."
     PRESR: (PRESR_API, ("rtx40-mfg",)),
     PRESR_MFG: (PRESR_API, ()),
+    # One zip per release, so there is nothing to skip.
+    JANBLADE: (JANBLADE_API, ()),
 }
 
 # The inverse of a skip list: a build that exists FOR one variant takes only
@@ -122,12 +133,15 @@ BUILDS = {
            "1-3 passes; not run here",
     PRESR_MFG: "wilsjo2's fork + RTX 40 MFG  -  the same pass with "
                "multi-frame generation, RTX 40 cards only; not run here",
+    JANBLADE: "Janblade's fork  -  a fork of wilsjo2's, neural rendering "
+              "before the upscaler; not run here",
 }
 
 
 def is_presr(build: str) -> bool:
-    """Either of wilsjo2's packages: both run the pass before the upscaler."""
-    return build in (PRESR, PRESR_MFG)
+    """wilsjo2's packages and Janblade's fork of them: all run the pass
+    before the upscaler."""
+    return build in (PRESR, PRESR_MFG, JANBLADE)
 
 
 def card_refusal(build: str, sm: int | None) -> str:

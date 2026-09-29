@@ -199,7 +199,9 @@ def _foreign_hooks(loaded, route: str) -> list[str]:
 # frame is a better answer than any of them, so it replaces them; every
 # other verdict names something the logs do show, and keeps it.
 _CANNOT_SEE = ("Add-ons loaded", "Inconclusive", "Loaded and set up",
-               "Set up correctly, but not switched on")
+               "Set up correctly, but not switched on",
+               # 2.0.7: the bridge's own log counted frames and nothing more
+               "The bridge delivered at least")
 
 
 def _name_foreign_hooks(rep: Report, foreign) -> Report:

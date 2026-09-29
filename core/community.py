@@ -30,6 +30,18 @@ from pathlib import Path
 
 from . import net
 
+
+def route_name(route: str) -> str:
+    """The name the route dropdown shows: the shared results keep the short
+    keys ("standalone", "renodx", "upstream"), and a sentence saying "the
+    standalone route" sent people looking for an entry the list calls
+    standalone-dlssnr (gate 2.0.6)."""
+    try:
+        from . import dlss
+        return dlss.LABELS[route].split(" - ")[0]
+    except Exception:
+        return str(route)
+
 # The aggregate the workflow publishes. raw.githubusercontent, not the API:
 # no rate limit worth speaking of, and it keeps working when the 60
 # anonymous API requests an hour are gone.
@@ -276,7 +288,7 @@ def advice(entry: dict | None, route: str = "", driver: str = "") -> list[str]:
     best = ranked[0] if ranked else None
     if best and best[1]:
         out.append(f"{total} reports for this game. "
-                   f"The {best[0]} route worked in {best[1]} of them"
+                   f"The {route_name(best[0])} route worked in {best[1]} of them"
                    + (f" and failed in {best[2]}" if best[2] else "") + ".")
     else:
         out.append(f"{total} reports for this game, and no route is "
@@ -285,10 +297,10 @@ def advice(entry: dict | None, route: str = "", driver: str = "") -> list[str]:
         mine = routes[route]
         w, f = mine.get("worked", 0), mine.get("failed", 0)
         if f and not w:
-            out.append(f"The route chosen here ({route}) failed in all "
+            out.append(f"The route chosen here ({route_name(route)}) failed in all "
                        f"{f} of its reports.")
         elif best and best[0] != route and best[1] > (w or 0):
-            out.append(f"The route chosen here ({route}) worked in "
+            out.append(f"The route chosen here ({route_name(route)}) worked in "
                        f"{w} of its reports.")
 
     bad = (entry.get("drivers") or {}).get(driver or "")
@@ -480,7 +492,8 @@ def _driver_in_route(data: dict, driver: str, route: str) -> str:
         w, n = rate(_table(data, "by_driver", driver).get(route))
         if n < MIN_DRIVER:
             return ""
-        line = f"Shared results with the {route} route on driver {driver}: {w} of {n} worked."
+        line = (f"Shared results with the {route_name(route)} route on driver {driver}: "
+                f"{w} of {n} worked.")
         mine = _driver_key(driver)
         better = []
         for other in table:
@@ -533,8 +546,8 @@ def class_pick(data: dict, klass: str, offer: list[str] | None,
     if best is None:
         return "", ""
     _c, name, w2, n2 = best
-    return name, (f"Shared results for {class_words(klass)}: the {name} route "
-                  f"worked in {w2} of {n2}, the {current} route in {w} of {n}.")
+    return name, (f"Shared results for {class_words(klass)}: the {route_name(name)} route "
+                  f"worked in {w2} of {n2}, the {route_name(current)} route in {w} of {n}.")
 
 
 def class_words(klass: str) -> str:
@@ -557,14 +570,14 @@ def class_line(data: dict, klass: str, route: str,
     w, n = rate(rows.get(route))
     if n < MIN_REPORTS:
         return ""
-    line = (f"Shared results for {class_words(klass)}: the {route} route "
+    line = (f"Shared results for {class_words(klass)}: the {route_name(route)} route "
             f"worked in {w} of {n}.")
     others = [(confidence(*rate(rows.get(o))), o, *rate(rows.get(o)))
               for o in (offer or []) if o != route
               and rate(rows.get(o))[1] >= MIN_REPORTS]
     if others:
         _c, o, w2, n2 = max(others)
-        line += f" The {o} route: {w2} of {n2}."
+        line += f" The {route_name(o)} route: {w2} of {n2}."
     return line
 
 
@@ -647,7 +660,7 @@ def next_route(data: dict, game, tried: str, offer: list[str] | None = None,
     if here:
         here.sort(key=lambda x: (x[1], x[1] / x[2] if x[2] else 0), reverse=True)
         n, w, t = here[0]
-        return (f"In this game the {n} route is reported working by {w} of "
+        return (f"In this game the {route_name(n)} route is reported working by {w} of "
                 f"{t}. Try that next - pick it in the route dropdown and "
                 f"install again.")
     # Otherwise games like this one when enough of them are in the list
@@ -670,8 +683,8 @@ def next_route(data: dict, game, tried: str, offer: list[str] | None = None,
     if mine_n and w * mine_n <= mine_w * t:
         return ""                    # nothing on offer does better
     return (f"Nobody has reported this game yet. {where}, "
-            f"the {n} route worked in {w} of {t} tries"
-            + (f", against {mine_w} of {mine_n} for {tried}" if mine_n else "")
+            f"the {route_name(n)} route worked in {w} of {t} tries"
+            + (f", against {mine_w} of {mine_n} for {route_name(tried)}" if mine_n else "")
             + " - it is the next one to try.")
 
 

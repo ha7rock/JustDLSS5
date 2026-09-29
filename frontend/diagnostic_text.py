@@ -197,6 +197,16 @@ Two add-ons process the frame: standalone-dlssnr and the renodx-dlss5 add-on.|st
 Two add-ons process the frame: the DLSS 5 add-on and standalone-dlssnr.|DLSS 5 插件和 standalone-dlssnr 同时处理画面。
 """
 MESSAGES = dict(line.split("|", 1) for line in _MESSAGES.strip().splitlines() if line.strip())
+MESSAGES.update({
+    "It started, then the game crashed - see below.": "游戏启动后崩溃，请查看下方记录。",
+    "The game crashed before the bridge delivered a frame - see below.": "Bridge 尚未输出画面，游戏就已崩溃，请查看下方记录。",
+    "It started, then the bridge stopped - see why below.": "Bridge 启动后停止输出，请查看下方原因。",
+    "The bridge stopped before it delivered a frame - see why below.": "Bridge 尚未输出画面就已停止，请查看下方原因。",
+    "The game called DLSS and the bridge delivered no frame - the DLSS 5 Bridge panel in the overlay says why, and 'report a bug' carries dlss5-bridge.log.": "游戏已调用 DLSS，但 Bridge 没有输出画面。请查看浮层中的 DLSS 5 Bridge 面板；反馈时附上诊断原始记录中的日志片段。",
+    "The bridge attached and delivered no frame from the driver's optical flow - the DLSS 5 Bridge panel in the overlay says why.": "Bridge 已加载，但未通过驱动光流输出画面。请查看浮层中的 DLSS 5 Bridge 面板。",
+    "The bridge attached and delivered no frame - turn DLSS on in the game's menu, then check the DLSS 5 Bridge panel in the overlay.": "Bridge 已加载但未输出画面。请在游戏设置中开启 DLSS，再查看浮层中的 DLSS 5 Bridge 面板。",
+})
+
 
 # Captures are inserted unchanged. Full matching avoids translating an excerpt
 # from an unrelated message whose wording happens to share a prefix.
@@ -268,6 +278,20 @@ _PATTERNS = [
     (r"NGX refused the neural feature \((.+)\); the add-on ran its own snippet instead\.", "NGX 拒绝了神经渲染功能，错误码 {0}；插件改用了自带模块。"),
     (r"Motion vectors: (.+) is (.+)\.", "运动矢量：{0}；来源报告的状态：{1}。"),
 ]
+
+_PATTERNS.extend([
+    (r"The bridge delivered at least (\d+) frames? in this launch, (.+) fps at its last count\.", "Bridge 本次至少输出 {0} 帧，最后一次记录为 {1} FPS。"),
+    (r"The bridge delivered at least (\d+) frames? in this launch\.", "Bridge 本次至少输出 {0} 帧。"),
+    (r"The bridge delivered at least (\d+) frames?; whether the neural pass drew them is in no log - switch the pass off and on in the (.+) and compare the picture\.", "Bridge 至少输出 {0} 帧；日志无法证明神经渲染的画面效果，请在 {1} 中切换效果并对比。"),
+    (r"The bridge attached in this launch \(dlss5-bridge (.+)\); its log has no delivered-frame line\.", "Bridge {0} 已加载，但本次日志没有输出画面的记录。"),
+    (r"The bridge stopped after delivering at least (\d+) frames?: (.+)\.", "Bridge 输出至少 {0} 帧后停止：{1}。"),
+    (r"The bridge stopped before it delivered a frame: (.+)\.", "Bridge 尚未输出画面就停止：{0}。"),
+    (r"The game crashed after the bridge delivered at least (\d+) frames?: (.+)\.", "Bridge 输出至少 {0} 帧后游戏崩溃：{1}。"),
+    (r"The game crashed before the bridge delivered a frame: (.+)\.", "Bridge 尚未输出画面，游戏就已崩溃：{0}。"),
+    (r"NVIDIA's runtime would not create the game's DLSS feature \((.+)\)\.", "NVIDIA 运行库无法创建游戏请求的 DLSS 功能（{0}）。"),
+    (r"The Vulkan mirror recorded at least (\d+) frames?; none is counted as delivered yet\.", "Vulkan 镜像记录了至少 {0} 帧，尚无已输出帧数统计。"),
+    (r"The bridge's evaluate failed (\d+) times? (?:after its last frame line|in this launch) \((.+)\)\.", "Bridge 记录了 {0} 次处理失败（{1}）。"),
+])
 PATTERNS = [(re.compile(source), target) for source, target in _PATTERNS]
 
 # Brief next steps for actionable findings. These supplement, rather than

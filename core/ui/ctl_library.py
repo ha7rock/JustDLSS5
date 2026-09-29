@@ -26,7 +26,10 @@ ARCH = (("all", "32 + 64-bit"), ("64", "64-bit only"), ("32", "32-bit only"))
 
 
 def first_line(e: Exception) -> str:
-    return (str(e).splitlines() or [""])[0] or type(e).__name__
+    """Why it stopped, in one line - the cause, not the rollback sentence a
+    failed install opens with (gate 2.0.7)."""
+    from .. import installer
+    return installer.cause_of(e)
 
 
 # Folders picked with "add a game" (#441). The saved library is dropped on a
@@ -773,6 +776,7 @@ class LibraryControl:
 
         def work():
             done = []
+            stopped = ""
             for g in targets:
                 self.q.put(("scan", f"updating {g.name}..."))
                 try:
@@ -785,17 +789,25 @@ class LibraryControl:
                     if anticheat.detect(g.install_dir, g.folder).present:
                         self.q.put(("log", (f"{g.name}: anti-cheat found - not updated", "warn")))
                         continue
-                    installer.install(g, opt, on_log=lambda t: log.write(t))
+                    rep = installer.install(g, opt, on_log=lambda t: log.write(t))
                     done.append(g)
+                    if installer.record_lost(rep):
+                        # the next game would meet the same full drive
+                        stopped = g.name
+                        self.q.put(("log", (f"{g.name}: {installer.cause_of(rep.warnings[-1])} "
+                                            f"- update all stopped here, the games after it were not updated", "warn")))
+                        break
                 except Exception as e:
                     log.exception(f"updating {g.name}", e)
                     self.q.put(("log", (f"{g.name}: {first_line(e)}", "err")))
-            self.q.put(("updated_all", (len(done), done, len(skipped))))
+            self.q.put(("updated_all", (len(done), done, len(skipped), stopped)))
         threading.Thread(target=work, daemon=True).start()
 
     def _on_updated_all(self, payload) -> None:
+        stopped = ""
         if isinstance(payload, tuple):
-            n, done, skipped = payload
+            n, done, skipped = payload[:3]
+            stopped = payload[3] if len(payload) > 3 else ""
         else:
             n, done, skipped = int(payload or 0), [], 0
         self.watch_refresh()
@@ -814,6 +826,7 @@ class LibraryControl:
         if done:
             prefs.set_("last_verdicts", self.verdicts)
         self.shell.status(f"updated {n} game{'s' if n != 1 else ''}"
+                          + (f" - stopped at {stopped}: no record could be saved" if stopped else "")
                           + (f" - {skipped} with anti-cheat left for you" if skipped else ""))
         self.check_stale()
         self.refresh("library")

@@ -345,7 +345,7 @@ def reliability(g: games.Game, path: str = FEEDER,
                 "so it is being replaced with a community build that does. "
                 "That build is not the mod author's: a mod's runtime is often "
                 "a fork carrying fixes for this exact game, and swapping it "
-                "can break them. The old one is backed up and 'Uninstall' "
+                "can break them. The old one is backed up and 'uninstall' "
                 "puts it back.")
         return BETA, (
             "The Remix runtime already installed here has the DLSS 5 neural "
@@ -945,7 +945,8 @@ def last_failure(root) -> str:
 
 
 def _roll_back(g, root: Path, rep: "Report", fresh: bool, log,
-               keep_note: str = "", rewrite=None, replaced: str = "") -> str:
+               keep_note: str = "", rewrite=None, replaced: str = "",
+               recorded: bool = True) -> str:
     """Take a failed FRESH install back out; the sentence that says so.
 
     A failed install used to leave what it had written and record it for
@@ -980,7 +981,14 @@ def _roll_back(g, root: Path, rep: "Report", fresh: bool, log,
             if replaced else "")
     if not wrote:
         return "Nothing was written into the game folder." + gone
-    if not fresh or not (root / MANIFEST).is_file():
+    if not recorded or not (root / MANIFEST).is_file():
+        # The record itself could not be written (a full drive): "recorded"
+        # would send the person to an uninstall that finds nothing (gate 2.0.6).
+        # Installing again would take these for the game's own files and
+        # back them up, so the way out is by hand. The backups are the
+        # game's own originals and never go on the delete list (gate 2.0.7).
+        return NO_RECORD_HEAD + _no_record_text(rep) + gone
+    if not fresh:
         return kept + gone
     try:
         uninstall(g, on_log=lambda s: None)
@@ -1013,6 +1021,82 @@ def _roll_back(g, root: Path, rep: "Report", fresh: bool, log,
                 "it had written was taken back out." + gone)
     return ("Nothing of it was left in the game folder: what it had written "
             "was taken back out, so the game runs as it did before.")
+
+
+NO_RECORD_HEAD = "No record of this install could be saved, so 'uninstall' has no list of it. "
+RECORD_LOST_HEAD = "The install finished and its files are in place, but "
+
+
+def _no_record_text(rep: "Report") -> str:
+    """What a failed install without a record left, and how to undo it by
+    hand: every file it wrote (never a backup of the game's own), the game
+    files it renamed aside, and the backups to rename back."""
+    backups = (BACKUP_SUFFIX,) + LEGACY_BACKUP_SUFFIXES
+    ours = [n for n in rep.written if not n.endswith(backups)]
+    kept = [n for n in rep.written if n.endswith(BACKUP_SUFFIX)]
+    out = []
+    if ours:
+        out.append(f"Delete what it wrote: {', '.join(ours)}.")
+    if kept:
+        out.append(f"Then rename the backups it made of the game's own files, "
+                   f"taking '{BACKUP_SUFFIX}' off the end: {', '.join(kept)}.")
+    if rep.sidelined:
+        out.append(f"It also renamed {', '.join(rep.sidelined)} by adding "
+                   f"'{SIDELINE_SUFFIX}' - rename {'them' if len(rep.sidelined) > 1 else 'it'} back.")
+    if rep.remix.get("conf"):
+        out.append(f"It added the line '{rep.remix.get('key')} = True' to "
+                   f"{rep.remix['conf']} - take that one line out.")
+    for note in rep.notes:
+        if note.startswith("registered ReShade as a Vulkan layer"):
+            out.append("It also registered ReShade as a Vulkan layer for this "
+                       "Windows user, which loads into every Vulkan application.")
+        elif note.startswith("registered ReShade as an OpenXR layer"):
+            out.append("It also registered ReShade as an OpenXR layer for this "
+                       "Windows user, which loads into every OpenXR application.")
+    if not out:
+        out.append("It may have changed a setting of RTX Remix or of the "
+                   "emulator, and wrote no file into the game folder.")
+    return " ".join(out)
+
+
+def _finish_record(recorded: bool, rep: "Report", log) -> None:
+    """A successful install whose record could not be saved must not end in a
+    plain 'Done': uninstall would find nothing (gate 2.0.7). The warning is
+    what the autopilot and 'update all' read."""
+    if recorded:
+        return
+    text = ("The install finished and its files are in place, but "
+            + NO_RECORD_HEAD[0].lower() + NO_RECORD_HEAD[1:] + _no_record_text(rep))
+    log(f"      !! {text}")
+    rep.warnings.append(text)
+
+
+def record_lost(rep) -> bool:
+    return any(str(w).startswith(RECORD_LOST_HEAD) for w in getattr(rep, "warnings", ()))
+
+
+# The sentences _roll_back opens an install error with. The cause comes after
+# them (the result card reads the whole text), so a caller that keeps one line
+# - the autopilot's reason, update all's log - takes it with cause_of.
+ROLLBACK_HEADS = ("Nothing of it was left", "Nothing of the new install was left",
+                  "What was written so far is recorded", NO_RECORD_HEAD,
+                  "Part of what it wrote could not be removed",
+                  "Nothing was written into the game folder")
+
+
+def cause_of(err) -> str:
+    """One line that says why an install stopped.
+
+    The rollback sentence went first in 2.0.7's locked-file message, and the
+    autopilot, which reads the first line, stopped recognising a game that
+    holds a file open (gate 2.0.7)."""
+    text = str(err).strip()
+    if not text:
+        return type(err).__name__
+    paras = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    if len(paras) > 1 and paras[0].startswith(ROLLBACK_HEADS):
+        return " ".join(ln.strip() for ln in paras[1].splitlines() if ln.strip())
+    return paras[0].splitlines()[0]
 
 
 def _ask_for_the_pass(root: Path, opt, log) -> None:
@@ -1350,7 +1434,9 @@ def plan(g: games.Game, opt: Options) -> list[str]:
             + [f"OptiScaler ({optiscaler.BUILDS.get(opt.opti_build, optiscaler.BUILDS['']).split('  -  ')[0]})",
                "nvngx_dlssnr.dll"] \
             + (["nvngx_dlss.dll"] if _opti_needs_dlss(opt) else []) \
-            + ["OptiScaler configuration"]
+            + ["OptiScaler configuration"] \
+            + ([f"frame generation files ({ownfg.label(opt.own_fg).split(' (')[0]})"]
+               if opt.own_fg in ownfg.RECIPES else [])
     steps.append("ReShade (Vulkan layer)" if g.api == "Vulkan" else "ReShade")
 
     if opt.path == UPSTREAM:
@@ -1681,7 +1767,7 @@ def preview(g: games.Game, opt: Options) -> Preview:
             write(rel(tdir, REMIX_NVNGX))
             pv.warnings.append(
                 "the mod's own Remix runtime is being replaced; it is backed "
-                "up and 'Uninstall' puts it back")
+                "up and 'uninstall' puts it back")
         write(rel(tdir, DLSSNR))
         try:
             crel = rel(remix.conf_path(root, trex).relative_to(root))
@@ -1825,7 +1911,7 @@ def preview(g: games.Game, opt: Options) -> Preview:
     if getattr(g, "emu", None) is not None:
         pv.outside.append(f"{g.emu.name}: its own config is switched to the "
                           f"render backend ReShade can reach (backed up beside "
-                          f"it; 'Uninstall' restores it)")
+                          f"it; 'uninstall' restores it)")
     # 1) ReShade
     if g.api == "Vulkan":
         found = vulkan.existing_registration()
@@ -1835,8 +1921,8 @@ def preview(g: games.Game, opt: Options) -> Preview:
             pv.outside.append(
                 f"Vulkan layer: {vulkan.LAYER_NAME} registered for this user "
                 f"(files in {vulkan.layer_dir()}) - it loads into EVERY Vulkan "
-                f"application until 'Uninstall' removes it")
-            pv.warnings.append("the Vulkan layer is global; 'Uninstall' "
+                f"application until 'uninstall' removes it")
+            pv.warnings.append("the Vulkan layer is global; 'uninstall' "
                                "removes it again")
     else:
         write(proxy)
@@ -2253,6 +2339,12 @@ def _previous_route(root: Path) -> str | None:
     data = _previous_manifest(root)
     if data is None:
         return None
+    # A record a failed first install left holding only its reason: that
+    # route is not in the folder, and "removing the previous X install" /
+    # "replaced a previous X install" over it were untrue (gate 2.0.7).
+    if net.ROLLED_BACK_NOTE in (data.get("notes") or []) \
+            and not (data.get("files") or data.get("dosyalar")):
+        return None
     # v1.0-v1.2 wrote no route at all; everything then was the feeder.
     return data.get("path") or FEEDER
 
@@ -2389,11 +2481,13 @@ def _purge_foreign_addons(root: Path, keep: str, rep: Report, log) -> None:
 
 
 def _write_manifest(root: Path, g: games.Game, opt: Options, rep: Report,
-                    proxy: str, level: str, complete: bool) -> None:
-    """Record what was written.
+                    proxy: str, level: str, complete: bool) -> bool:
+    """Record what was written; False when the record could not be saved.
 
     Also written when an install FAILS part way: without it the orphaned files
-    could not be cleaned up afterwards.
+    could not be cleaned up afterwards. A failed write leaves the previous
+    record whole, which may be an older attempt's - so the caller is told,
+    rather than finding a record on disk and trusting it (gate 2.0.7).
     """
     # The remembered folder walk is dropped here rather than only at the
     # start of install(): the preview and the swap now READ that cache
@@ -2480,7 +2574,8 @@ def _write_manifest(root: Path, g: games.Game, opt: Options, rep: Report,
             "gpu_pref": gpu_records,
         }, ensure_ascii=False, indent=2))
     except OSError:
-        pass
+        return False
+    return True
 
 
 def _write_atomic(path: Path, text: str) -> None:
@@ -2544,8 +2639,11 @@ def options_from_manifest(root: Path) -> Options | None:
                      or bool(data.get("native_dlss", False))),
         opti_proxy=(data.get("proxy") or "") if path == OPTI else "",
         opti_build=str(data.get("opti_build") or "") if path == OPTI else "",
+        # A set the person pressed 'forget them' on reads as none, so the
+        # next install takes it out (gate 2.0.7).
         own_fg=(ownfg.recorded(data)[0] if path == OPTI
-                and ownfg.recorded(data)[0] in ownfg.RECIPES else ""),
+                and ownfg.recorded(data)[0] in ownfg.RECIPES
+                and not ownfg.forgotten(ownfg.recorded(data)[0]) else ""),
         # A runtime we swapped last time must be swapped again on an update,
         # or the update would put the mod's neural-pass-less runtime back.
         remix_swap=bool((data.get("components") or {}).get("remix_runtime")),
@@ -3139,7 +3237,7 @@ def install(g: games.Game, opt: Options, on_step=None, on_prog=None, on_log=None
                 rep.notes.append(
                     "the mod's own Remix runtime was replaced with a "
                     "community build that has the neural pass; the original "
-                    "is backed up beside it and 'Uninstall' puts it back. If "
+                    "is backed up beside it and 'uninstall' puts it back. If "
                     "the mod misbehaves after this, that swap is the reason.")
                 flavour = remix.runtime_flavour(trex) or remix.NEURAL
 
@@ -3204,7 +3302,7 @@ def install(g: games.Game, opt: Options, on_step=None, on_prog=None, on_log=None
             log("      (that one line; every other setting in rtx.conf is "
                 "left exactly as it was)")
             rep.notes.append(
-                f"{key} = True was set in {_rel(conf)}; 'Uninstall' takes "
+                f"{key} = True was set in {_rel(conf)}; 'uninstall' takes "
                 f"that line back out and touches nothing else in the file")
             rep.notes.append(
                 "In game: Alt+X opens the Remix menu -> Developer Settings "
@@ -3217,8 +3315,9 @@ def install(g: games.Game, opt: Options, on_step=None, on_prog=None, on_log=None
                 "draws a frame.")
             clear_failure(root)     # this folder's last failure is history now
             _set_gpu_pref(root, g, opt, rep, log)
-            _write_manifest(root, g, opt, rep, proxy, level, complete=True)
-            prefs.add_install(root)
+            _finish_record(_write_manifest(root, g, opt, rep, proxy, level, complete=True), rep, log)
+            if not record_lost(rep):
+                prefs.add_install(root)
             prog(100, "Done")
             return rep
 
@@ -3253,6 +3352,14 @@ def install(g: games.Game, opt: Options, on_step=None, on_prog=None, on_log=None
             elif opt.opti_build == optiscaler.PRESR:
                 log(f"      wilsjo2's fork, {orel[0]}")
                 rep.notes.append("OptiScaler is wilsjo2's fork of the DLSS-NR "
+                                 "build: the neural pass runs before super "
+                                 "resolution rather than after it, over one to "
+                                 "three passes (OptiScaler.ini: Passes=). Not "
+                                 "run in a game here - if it misbehaves, "
+                                 "install again with the DLSS-NR build.")
+            elif opt.opti_build == optiscaler.JANBLADE:
+                log(f"      Janblade's fork, {orel[0]}")
+                rep.notes.append("OptiScaler is Janblade's fork of wilsjo2's "
                                  "build: the neural pass runs before super "
                                  "resolution rather than after it, over one to "
                                  "three passes (OptiScaler.ini: Passes=). Not "
@@ -3421,7 +3528,7 @@ def install(g: games.Game, opt: Options, on_step=None, on_prog=None, on_log=None
             # Record the name OptiScaler actually went in under, not the
             # ReShade proxy this route never installs.
             _set_gpu_pref(root, g, opt, rep, log)
-            _write_manifest(root, g, opt, rep, oproxy, level, complete=True)
+            _finish_record(_write_manifest(root, g, opt, rep, oproxy, level, complete=True), rep, log)
             prog(100, "Done")
             return rep
 
@@ -3443,7 +3550,7 @@ def install(g: games.Game, opt: Options, on_step=None, on_prog=None, on_log=None
                 rep.notes.append("registered ReShade as an OpenXR layer for this "
                                  "user, so the pass reaches the headset's image; "
                                  "it loads into EVERY OpenXR application until "
-                                 "'Uninstall' removes it")
+                                 "'uninstall' removes it")
             else:
                 rep.notes.append(f"reused the existing ReShade OpenXR layer "
                                  f"({xr_manifest})")
@@ -3467,7 +3574,7 @@ def install(g: games.Game, opt: Options, on_step=None, on_prog=None, on_log=None
                 rep.notes.append("registered ReShade as a Vulkan layer for this "
                                  "user - it now loads into EVERY Vulkan "
                                  "application, not just this game")
-                rep.warnings.append("the Vulkan layer is global; 'Uninstall' "
+                rep.warnings.append("the Vulkan layer is global; 'uninstall' "
                                     "removes it again")
             else:
                 rep.notes.append(f"reused the existing ReShade Vulkan layer "
@@ -4049,20 +4156,29 @@ def install(g: games.Game, opt: Options, on_step=None, on_prog=None, on_log=None
 
     except PermissionError as e:
         note_failure(root, e)
-        _write_manifest(root, g, opt, rep, oproxy or proxy, level, complete=False)
+        recorded = _write_manifest(root, g, opt, rep, oproxy or proxy, level, complete=False)
+        # A fresh install is taken back out here too (gate 2.0.6): a locked
+        # file stopped it just as surely as a failed download. _roll_back
+        # says so itself when the lock also keeps the clean-up from finishing.
+        left = _roll_back(g, root, rep, fresh, log, replaced=switched, recorded=recorded)
+        log("")
+        log(f"Windows refused to write a file: {e}")
+        # The cause after what was taken out: the result card shows all
+        # of it, and cause_of() finds the cause for the one-line callers.
+        # Without a record, installing again would back our own files up as
+        # the game's, so they go first - once the game no longer holds them.
         raise InstallError(
-            f"Windows refused to write a file:\n{e}\n\n"
+            f"{left}\n\nWindows refused to write a file:\n{e}\n\n"
             f"Almost always this means the game (or its launcher) is running "
-            f"and holding the file open. Close it and run the install again - "
-            f"what was written so far has been recorded, so 'uninstall' can "
-            f"clean up if you would rather start fresh."
-            + (f" The previous {switched} install was taken out before this one "
-               f"began and is not put back - install it again to return to it."
-               if switched else "")) from e
+            f"and holding the file open. "
+            + ("Close the game first, then delete and rename the files listed "
+               "above, and install again."
+               if left.startswith(NO_RECORD_HEAD) else
+               "Close it and run the install again.")) from e
     except (sources.RateLimited, sources.Unavailable) as e:
         note_failure(root, e)
-        _write_manifest(root, g, opt, rep, oproxy or proxy, level, complete=False)
-        left = _roll_back(g, root, rep, fresh, log, replaced=switched)
+        recorded = _write_manifest(root, g, opt, rep, oproxy or proxy, level, complete=False)
+        left = _roll_back(g, root, rep, fresh, log, replaced=switched, recorded=recorded)
         log("")
         log(str(e))
         # The cause last: the window's result card shows the last line.
@@ -4086,8 +4202,9 @@ def install(g: games.Game, opt: Options, on_step=None, on_prog=None, on_log=None
                 note = net.STOP_NOTE + said[:400]
         if note:
             rep.notes.append(note)
-        _write_manifest(root, g, opt, rep, oproxy or proxy, level, complete=False)
+        recorded = _write_manifest(root, g, opt, rep, oproxy or proxy, level, complete=False)
         left = _roll_back(g, root, rep, fresh, log, keep_note=note, replaced=switched,
+                          recorded=recorded,
                           rewrite=lambda: _write_manifest(
                               root, g, opt, rep, oproxy or proxy, level,
                               complete=False))
@@ -4147,8 +4264,9 @@ def install(g: games.Game, opt: Options, on_step=None, on_prog=None, on_log=None
     # --- record -----------------------------------------------------------
     clear_failure(root)     # this folder's last failure is history now
     _set_gpu_pref(root, g, opt, rep, log)
-    _write_manifest(root, g, opt, rep, proxy, level, complete=True)
-    prefs.add_install(root)
+    _finish_record(_write_manifest(root, g, opt, rep, proxy, level, complete=True), rep, log)
+    if not record_lost(rep):
+        prefs.add_install(root)
     prog(100, "Done")
     return rep
 

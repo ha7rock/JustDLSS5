@@ -23,6 +23,7 @@ def main():
         parser.add_argument("--vr", action="store_true")
         from frontend.backend import optiscaler
         parser.add_argument("--opti-build", choices=tuple(key for key in optiscaler.BUILDS if key))
+        parser.add_argument("--own-fg", help="自备补帧 DLL 路径或已保存的名称 / Local frame generation DLL path or saved name")
         args = parser.parse_args()
         if not args.target and not args.video:
             parser.error("请指定游戏目录 / A game target is required")
