@@ -292,6 +292,30 @@ _PATTERNS.extend([
     (r"The Vulkan mirror recorded at least (\d+) frames?; none is counted as delivered yet\.", "Vulkan 镜像记录了至少 {0} 帧，尚无已输出帧数统计。"),
     (r"The bridge's evaluate failed (\d+) times? (?:after its last frame line|in this launch) \((.+)\)\.", "Bridge 记录了 {0} 次处理失败（{1}）。"),
 ])
+MESSAGES.update({
+"DLSS 5 is running inside Remix.": "Remix 日志确认 DLSS 5 正在处理画面。",
+"DLSS could not start inside this game's process - try another route.": "DLSS 无法在此游戏进程中启动，请尝试其他路线。",
+"Inconclusive - the Remix log shows no neural frame; set the log level in rtx.conf to info and check again.": "暂无法判断：Remix 日志没有神经渲染帧记录。请将 rtx.conf 日志级别设为 info，运行游戏后重新检查。",
+"NGX refused to create DLSS - see its reason below.": "NGX 拒绝创建 DLSS，请查看下方错误原因。",
+"Remix ran with the neural pass switched off - turn it on in Alt+X -> Neural Rendering.": "Remix 已运行，但神经渲染未开启。请在 Alt+X → Neural Rendering 中开启。",
+"Remix ran; the neural pass skipped its frames - see why below.": "Remix 已运行，但神经渲染跳过了画面，请查看下方原因。",
+"The Remix log has no evaluated frame.": "Remix 日志中没有已处理帧记录。",
+"The neural pass is switched off.": "神经渲染未开启。",
+"The neural pass skipped its frames.": "神经渲染跳过了画面。",
+"The runtime loaded the DLSS-NR snippet.": "运行库已加载 DLSS-NR 模块。",
+"Two feeder add-ons are in the folder: dlss5-feed.addon64 and dlss5-feed-helper.addon64.": "目录内有两个 Feeder 插件：dlss5-feed.addon64 和 dlss5-feed-helper.addon64。",
+"Two feeder add-ons in one folder - keep one of the two.": "同一目录内有两个 Feeder 插件，请仅保留一个。",
+})
+
+
+_PATTERNS.extend([
+ (r"The feeder logged that NGX would not set DLSS up inside this game's process(.*)\.", "Feeder 报告 NGX 无法在此游戏进程中初始化 DLSS{0}。"),
+ (r"NGX refused to set DLSS up(.*)\.", "NGX 拒绝初始化 DLSS{0}。"),
+ (r"(.+) ran, and OptiScaler's (.+) was not loaded in it - try another 'loads as' name\.", "{0} 已运行，但未加载 OptiScaler 的 {1}。请更换高级设置中的 OptiScaler 加载名称后重新安装。"),
+ (r"OptiScaler was loaded into (.+) at (.+), and no log was written\.", "{0} 在 {1} 已加载 OptiScaler，但未写入日志。"),
+ (r"(.+) runs from another folder, and the install went beside a copy that does not start - install again there\.", "{0} 从另一目录运行，组件安装在未启动的副本旁。请选择实际运行的程序，再重新安装。"),
+ (r"The game runs from (.+), and the install went beside (.+) - install again there\.", "实际运行的是 {0}，组件却安装在 {1} 旁。请选择实际运行的程序，再重新安装。"),
+])
 PATTERNS = [(re.compile(source), target) for source, target in _PATTERNS]
 
 # Brief next steps for actionable findings. These supplement, rather than

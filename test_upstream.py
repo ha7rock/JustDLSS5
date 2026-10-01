@@ -12,6 +12,45 @@ from frontend.service import BackendService, LibraryEntry
 
 
 class UpstreamTests(unittest.TestCase):
+    def test_optiscaler_unloaded_proxy_is_setup_problem_not_route_failure(self):
+        from core import watch, verdicts
+        from frontend.diagnostic_text import translate
+        import json
+        manifest = {"version": 1, "complete": True, "exe": "game.exe", "bitness": 64, "api": "DX12", "proxy": "d3d12.dll", "path": "optiscaler", "files": ["d3d12.dll", "nvngx_dlssnr.dll", "OptiScaler.ini"]}
+        (self.folder / installer.MANIFEST).write_text(json.dumps(manifest))
+        for name in ("d3d12.dll", "nvngx_dlssnr.dll"):
+            (self.folder / name).write_bytes(b"MZ")
+        (self.folder / "OptiScaler.ini").write_text("[Log]\nLogToFile=true\n")
+        seen = {"at": 1, "name": "game.exe", "exe": str(self.exe), "ours": [], "elsewhere": []}
+        with patch.object(watch, "inspect", return_value=[]), patch.object(watch, "last_sighting", return_value=seen):
+            report = diagnose.analyse(self.folder)
+        self.assertIn("was not loaded in it", report.verdict)
+        self.assertFalse(verdicts.route_failed(report.verdict))
+        self.assertIn("加载名称", translate(report.verdict))
+
+    def test_remix_evaluated_inactive_and_silent_logs_are_distinguished(self):
+        from core import remix
+        log = self.folder / "remix.log"
+        (self.folder / remix.DLSSNR).write_bytes(b"fixture")
+        cases = [("NVIDIA DLSS-NR evaluated (count=12)", "Working."),
+                 ("NVIDIA DLSS-NR inactive: disabled", "Remix ran with the neural pass switched off"),
+                 ("runtime started", "Inconclusive - the Remix log shows no neural frame")]
+        with patch.object(remix, "find_runtime", return_value=self.folder), patch.object(remix, "runtime_flavour", return_value=remix.NEURAL), patch.object(remix, "log_path", return_value=log):
+            for text, expected in cases:
+                log.write_text(text)
+                report = diagnose._analyse_remix(self.folder, diagnose.Report(), 0, {})
+                self.assertTrue(report.verdict.startswith(expected), report.verdict)
+            report = diagnose._analyse_remix(self.folder, diagnose.Report(), log.stat().st_mtime + 120, {})
+            self.assertNotEqual(report.verdict, "Working.")
+            self.assertTrue(any("predates" in f.title for f in report.findings))
+
+    def test_embedded_ngx_log_does_not_supply_feeder_success_evidence(self):
+        text = "[feed] NGX SuperSampling.FeatureInitResult: 0xBAD00005 (PlatformError)\n[feed] ===== NGX's own log of the failure above =====\n[NGX] frame 1 delivered\n[feed] ===== end of NGX's own log (1 lines) =====\n"
+        cleaned = diagnose._strip_ngx(text)
+        self.assertIn("0xBAD00005", cleaned)
+        self.assertNotIn("frame 1 delivered", cleaned)
+
+
     def test_batch_stops_when_install_record_cannot_be_saved(self):
         from test_ui import entry
         service = BackendService()
