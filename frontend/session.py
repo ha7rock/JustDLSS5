@@ -114,9 +114,9 @@ def analyse(entry, target=0, started=""):
     if report.ran and not related and not started and work_applies(game, route):
         exact = autotune.ran_at_exact(folder, route)
         resolution = exact or 100
-        feed = diagnose._last_run(diagnose._tail(folder / diagnose.FEED_LOG, 100_000))
+        feed = diagnose._last_feed_session(diagnose._tail(folder / diagnose.FEED_LOG, diagnose.TAIL_FEED))
         opti_path = diagnose._opti_log(folder)
-        opti = diagnose._last_run(diagnose._tail(opti_path, 100_000)) if opti_path else ""
+        opti = diagnose._last_run(diagnose._tail(opti_path, diagnose.TAIL_OPTI)) if opti_path else ""
         measured = autotune.measure(feed, opti, route, resolution)
         log_path = opti_path if route == dlss.OPTI else folder / diagnose.FEED_LOG
         if measured and (exact is None or (log_path and autotune.written_after(folder, route, log_path))):
