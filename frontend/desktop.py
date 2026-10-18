@@ -5,7 +5,7 @@ import sys
 import time
 from queue import SimpleQueue
 
-from PySide6.QtCore import Qt, QTimer, QUrl, QSize, QPoint
+from PySide6.QtCore import Qt, QTimer, QUrl, QSize, QPoint, QByteArray
 from PySide6.QtGui import QDesktopServices, QFont, QIcon, QPixmap, QPainter, QColor, QPen, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QFrame, QStackedWidget, QLineEdit, QComboBox, QTableView,
@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
     QCheckBox, QToolButton, QPlainTextEdit, QProgressBar, QFileDialog, QMessageBox,
     QDialog, QMenu, QInputDialog, QSizePolicy, QStyle)
 
-from .backend import prefs, update, dlss, installer, feedcfg, reshade_ini, optiscaler, profiles, video, compare, remixlist, remixdl, sources, gpu
+from .backend import prefs, update, dlss, installer, feedcfg, reshade_ini, optiscaler, profiles, video, compare, remixlist, remixdl, sources, gpu, vulkan
 from .service import BackendService, LibraryEntry
 from .jobs import Jobs
 from .library import LibraryModel, LibraryFilter, LibraryTable, CoverView
@@ -177,6 +177,9 @@ class MainWindow(QMainWindow):
         self.resize(min(max(900, size[0]), screen.width()), min(max(620, size[1]), screen.height()))
         self.move(screen.x() + (screen.width() - self.width()) // 2,
                   screen.y() + max(30, (screen.height() - self.height()) // 2))
+        geometry = prefs.get("studio_geometry", "")
+        if isinstance(geometry, str) and geometry:
+            self.restoreGeometry(QByteArray.fromBase64(geometry.encode("ascii", "ignore")))
         self.setStyleSheet(STYLES)
         self.app_icon = QIcon(str(Path(__file__).with_name("justdlss5.ico")))
         self.setWindowIcon(self.app_icon)
@@ -1292,6 +1295,7 @@ class MainWindow(QMainWindow):
                  "experimental": self.t("实验性支持", "Experimental")}
         self.compatibility.setText(names.get(level, level) if usable else self.t("当前硬件或游戏不支持", "Unavailable for this setup"))
         self.compatibility.setToolTip(reason + "\n" + explanation)
+        reason = (translate(reason, self.chinese) or reason)
         self.route_hint.setText(self.t("此路线支持当前游戏和显卡。", "This route supports the current game and GPU.") if usable else reason)
         self.route_hint.setVisible(not usable)
         self.route_hint.setToolTip(reason)
@@ -1461,6 +1465,7 @@ class MainWindow(QMainWindow):
         self.navigate(2)
 
     def _refresh_install_status(self, entry):
+        self._forget_diagnosis(entry)
         def ready(installed):
             entry.installed = installed
             self.model.refresh()
@@ -1469,7 +1474,16 @@ class MainWindow(QMainWindow):
                 self._route_changed()
         self._submit(lambda emit: bool(entry.game.installed), ready)
 
+    def _forget_diagnosis(self, entry):
+        self.game_reports.pop(entry.key, None)
+        if self.watch_result and self.watch_result[1].folder == str(entry.game.install_dir):
+            self.watch_result = None
+            self.watch_report_button.setEnabled(False)
+        if self.current and self.current.key == entry.key:
+            self.game_session_status.setText("")
+
     def _installed(self, entry, report):
+        self._forget_diagnosis(entry)
         from .backend import installer
         if installer.record_lost(report):
             self._refresh_install_status(entry)
@@ -1494,11 +1508,18 @@ class MainWindow(QMainWindow):
         if QMessageBox.question(self, self.t("卸载", "Uninstall"), self.t(f"卸载 {entry.game.name} 的增强组件并恢复备份？", f"Remove installed components and restore backups for {entry.game.name}?")) != QMessageBox.StandardButton.Yes:
             return
         def done(result):
+            self._forget_diagnosis(entry)
             entry.installed = False
             self.model.refresh()
             self._append_log("\n".join(result))
             self._filter()
             self._route_changed()
+            if prefs.vulkan_games_or_none() == []:
+                left = vulkan.machine_leftover()
+                if left:
+                    self.show_text(self.t("仍需管理员清理", "Administrator cleanup required"), self.t(
+                        "ReShade 的 Vulkan 层仍为所有用户注册。请以管理员身份启动工具，在设置中点击“清理 Vulkan 残留”。",
+                        "ReShade Vulkan is still registered for all users. Run this tool as administrator and choose Clean up Vulkan remnants in Settings."))
         self._submit(lambda emit: self.service.uninstall(entry, emit), done, busy=True, title=self.t("正在卸载…", "Uninstalling…"))
 
     def preview(self):
@@ -1601,6 +1622,8 @@ class MainWindow(QMainWindow):
             from .runtime_tools import RuntimeDialog
             dialog = RuntimeDialog(self.current.game, self.chinese, self)
             dialog.finished.connect(lambda code: self._close_game_tool())
+            entry = self.current
+            dialog.files_changed.connect(lambda: self._forget_diagnosis(entry))
             self._mount_game_tool(dialog)
 
     def remove_remix(self):
@@ -1897,6 +1920,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.watch_report_button, alignment=Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(button(self.t("OpenXR 注册管理", "OpenXR registration"), self.manage_openxr), alignment=Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(label(self.t("维护", "MAINTENANCE"), "eyebrow"))
+        layout.addWidget(button(self.t("清理 Vulkan 残留", "Clean up Vulkan remnants"), self.cleanup_vulkan), alignment=Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(button(self.t("重新安装所有游戏的组件", "Reinstall components for all games"), self.update_all), alignment=Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(label(self.t("窗口大小自动保存。Ctrl+F 搜索游戏，Esc 返回上一页。", "Window size is remembered. Ctrl+F focuses search; Esc returns to the previous page."), "muted", True))
         layout.addStretch()
@@ -1956,6 +1980,19 @@ class MainWindow(QMainWindow):
                 return updates.Result("unavailable")
         self._submit(check, done, controls=(self.update_check_button,))
 
+    def cleanup_vulkan(self):
+        if self.busy_job:
+            return
+        if QMessageBox.question(self, self.t("清理 Vulkan 残留", "Clean up Vulkan remnants"), self.t(
+                "仅清理本工具遗留的所有用户 Vulkan 层注册；需要管理员权限，且不能有仍使用该层的安装。继续？",
+                "Remove only this tool's leftover all-users Vulkan layer registration? Requires administrator rights and no remaining Vulkan installs.")) != QMessageBox.StandardButton.Yes:
+            return
+        self._submit(lambda emit: vulkan.cleanup_machine(prefs.vulkan_games_or_none()),
+                     lambda removed: self.show_text(self.t("清理结果", "Cleanup result"), self.t(
+                         "已清理。" if removed else "未做更改。可能没有残留、仍有 Vulkan 安装，或缺少管理员权限。",
+                         "Removed." if removed else "No changes. There may be no remnants, remaining Vulkan installs, or administrator rights are missing.")),
+                     busy=True, title=self.t("正在清理…", "Cleaning up…"))
+
     def update_all(self):
         entries = [entry for entry in self.model.entries if entry.installed]
         if not self._confirm_anticheat(entries):
@@ -1964,6 +2001,8 @@ class MainWindow(QMainWindow):
             self.show_text(self.t("无需更新", "Nothing to update"), self.t("请先扫描游戏库。", "Scan the library first."))
             return
         if QMessageBox.question(self, self.t("更新全部", "Update all"), self.t(f"使用原安装配置重新安装 {len(entries)} 款游戏的组件？", f"Reinstall components for {len(entries)} games using their saved settings?")) == QMessageBox.StandardButton.Yes:
+            for entry in entries:
+                self._forget_diagnosis(entry)
             self._submit(lambda emit: self.service.update_all(entries, emit), busy=True, title=self.t("正在更新组件…", "Updating components…"))
             self.navigate(2)
 
@@ -2160,7 +2199,9 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self._close_game_tool()
-        prefs.set_("studio_window", [self.width(), self.height()])
+        normal = self.normalGeometry()
+        prefs.set_("studio_window", [normal.width(), normal.height()])
+        prefs.set_("studio_geometry", bytes(self.saveGeometry().toBase64()).decode("ascii"))
         prefs.set_("studio_window_layout", 1)
         self.watch_timer.stop()
         if self.watcher:

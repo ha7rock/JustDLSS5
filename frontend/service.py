@@ -164,8 +164,14 @@ class BackendService:
         else:
             options = replace(options, native_dlss=support.native_dlss, upscaler=support.upscaler)
         level, explanation = installer.reliability(game, options.path, upscaler=support.upscaler)
+        refusal = gpu.no_dlss_here()
+        if refusal:
+            level, explanation = "unsupported", refusal
+            fit = {route: (False, refusal) for route in support.options}
         levels = {route: installer.reliability(game, route, upscaler=support.upscaler)
                   for route in support.options}
+        if refusal:
+            levels = {route: (level, explanation) for route in support.options}
         return Inspection(entry, support, fit, options, name or "", level, explanation, levels,
                           games.api_override(game.folder),
                           mfg.applies(sm, game.api, game.install_dir, game.folder)[0],

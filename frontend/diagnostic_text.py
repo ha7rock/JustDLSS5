@@ -8,6 +8,9 @@ import re
 
 
 _MESSAGES = r"""
+DXVK ran and ReShade did not, with ReShade's layer registered for elevated programs too - report it.|DXVK 已运行，但 ReShade 未加载；管理员程序所需的层也已注册。请反馈此问题。
+Neural rendering ran.|神经渲染已运行。
+ReShade ran here and left no ReShade.log.|ReShade 已加载，但未生成 ReShade.log。
 DLSS was called, and no neural frame followed - play a minute in the game and check again.|游戏已调用 DLSS，但尚未记录到神经渲染帧。请游玩一分钟后再检查。
 ReShade is loading as d3d9.dll, in front of DXVK.|ReShade 以 d3d9.dll 提前加载，挡住了 DXVK。
 ReShade loaded as the game's d3d9.dll in front of DXVK, so the game stays on DirectX 9 - take that d3d9.dll out and install again.|ReShade 的 d3d9.dll 在 DXVK 前加载，游戏仍运行于 DirectX 9。请移除此 d3d9.dll 后重新安装。
@@ -315,6 +318,18 @@ _PATTERNS.extend([
  (r"OptiScaler was loaded into (.+) at (.+), and no log was written\.", "{0} 在 {1} 已加载 OptiScaler，但未写入日志。"),
  (r"(.+) runs from another folder, and the install went beside a copy that does not start - install again there\.", "{0} 从另一目录运行，组件安装在未启动的副本旁。请选择实际运行的程序，再重新安装。"),
  (r"The game runs from (.+), and the install went beside (.+) - install again there\.", "实际运行的是 {0}，组件却安装在 {1} 旁。请选择实际运行的程序，再重新安装。"),
+])
+_PATTERNS.extend([
+    (r"(.+) has no tensor cores - NVIDIA's driver does not offer DLSS on it, so DLSS 5 cannot run on it with any route\. It needs an RTX card \(RTX 20 or newer\)\.", "{0} 没有 Tensor Core，无法运行 DLSS 5。需要 RTX 20 或更新的 RTX 显卡。"),
+    (r"(.+) is older than RTX 20 and has no tensor cores - DLSS 5 cannot run on it with any route\.", "{0} 早于 RTX 20，无法运行 DLSS 5。"),
+    (r"Neural rendering ran; a Present failed later( in the game's frame generation)? - see below\.", "神经渲染曾运行，随后提交画面失败。详情见下方。"),
+    (r"Later a Present failed \(0x([0-9A-F]+)\)( in the game's frame generation)?\.", "随后提交画面失败，错误码 0x{0}。"),
+    (r"ReShade loaded, and the game crashed before the add-on got going - Windows recorded the fault(.*)\.", "ReShade 已加载，但游戏在插件启动前崩溃。Windows 异常记录{0}。"),
+])
+_PATTERNS.extend([
+    (r"ReShade ran in (.+) and wrote no log here - most likely it cannot write to this folder\.", "ReShade 已在 {0} 中运行，但未写入日志。请检查游戏目录的写入权限。"),
+    (r"(.+) had (.+) loaded and no DirectX 10/11/12 when the tool looked - if it was already drawing, set 'graphics api' to (.+) and install again\.", "检测到 {0} 加载了 {1}，未加载 DirectX 10/11/12。若当时已进入游戏画面，请将图形 API 设为 {2} 后重新安装。"),
+    (r"(.+) (is running|ran at .+), and ReShade's Vulkan layer did not reach it - nothing of this install was loaded\.", "{0} 已运行，但 ReShade Vulkan 层未加载，未检测到本次安装的组件。"),
 ])
 PATTERNS = [(re.compile(source), target) for source, target in _PATTERNS]
 

@@ -257,5 +257,48 @@ class Upstream206Tests(unittest.TestCase):
             with self.assertRaises(ownfg.OwnFgError):
                 ownfg.identify([fake])
 
+class Upstream209Tests(unittest.TestCase):
+    def test_standalone_close_fault_requires_unique_current_log(self):
+        from frontend.session import closing_fault
+        from core import diagnose
+        import os
+        from datetime import datetime, timezone
+        with tempfile.TemporaryDirectory() as temp:
+            folder = Path(temp)
+            log = folder / "standalone.log"
+            log.write_text("standalone session ending\n")
+            stamp = time.time() - 10
+            os.utime(log, (stamp, stamp))
+            crash = NS(when=datetime.fromtimestamp(stamp + 1, timezone.utc).strftime("%Y-%m-%d %H:%M:%S"))
+            with patch.object(diagnose.model, "STANDALONE_LOG", log), patch.object(diagnose.chain, "_other_standalone", return_value=False):
+                self.assertTrue(closing_fault(crash, folder, "standalone"))
+                with patch.object(diagnose.chain, "_other_standalone", return_value=True):
+                    self.assertFalse(closing_fault(crash, folder, "standalone"))
+                os.utime(log, (stamp - 120, stamp - 120))
+                self.assertFalse(closing_fault(crash, folder, "standalone"))
+
+    def test_crash_replaces_pending_launch_request(self):
+        from frontend.session import analyse
+        from core import diagnose
+        game = entry()
+        report = diagnose.Report()
+        report.verdict = "No frame yet - play once and check again."
+        report.add(diagnose.WARN, "play once and check again", "No frame yet")
+        crash = NS(when="2026-10-18 08:00:00", module="fixture.dll")
+        with patch.object(diagnose, "analyse", return_value=report), patch.object(diagnose, "_manifest", return_value={"path":"feeder"}), patch.object(diagnose, "_installed_at", return_value=0), patch("frontend.session.wincrash.last_crash", return_value=crash), patch("frontend.session.current_crash", return_value=True), patch("frontend.session.wincrash.describe", return_value=[]):
+            result = analyse(game)
+        self.assertIn("crashed before the add-on", result.verdict)
+        self.assertFalse(any("play once" in finding.title for finding in result.findings))
+
+    def test_known_tensorless_gpu_refuses_without_rejecting_unknown_nvidia(self):
+        from core import gpu
+        from frontend.diagnostic_text import translate
+        with patch.object(gpu, "_adapters", return_value=["NVIDIA GeForce GTX 1650"]):
+            reason = gpu.no_dlss_here()
+            self.assertIn("no tensor cores", reason)
+            self.assertIn("RTX 20", translate(reason))
+        with patch.object(gpu, "_adapters", return_value=["NVIDIA GeForce GTX 1650", "NVIDIA Unknown"]):
+            self.assertIsNone(gpu.no_dlss_here())
+
 if __name__ == '__main__':
     unittest.main()

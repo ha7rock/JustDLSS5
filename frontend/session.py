@@ -33,6 +33,8 @@ def current_crash(crash, folder):
         return False
     paths = [folder / diagnose.FEED_LOG, folder / "ReShade.log", folder / "host64/dlss5-feed-host.log",
              folder / "dlss5-bridge.log", folder / "rtx-remix/logs/remix-dxvk.log"]
+    if str((diagnose._manifest(folder) or {}).get("path") or "") == "standalone" and not diagnose.chain._other_standalone(folder):
+        paths.append(diagnose.model.STANDALONE_LOG)
     opti = diagnose._opti_log(folder)
     if opti:
         paths.append(opti)
@@ -55,10 +57,15 @@ def closing_fault(crash, folder, route):
     Requires a close-time fault and final OptiScaler teardown lines; an old
     session's unload or capability-query parameter cleanup is insufficient.
     """
-    if crash is None or route != dlss.OPTI:
+    if crash is None or route not in (dlss.OPTI, "standalone"):
         return False
     try:
-        path = diagnose._opti_log(folder) or folder / "OptiScaler.log"
+        if route == "standalone":
+            if diagnose.chain._other_standalone(folder):
+                return False
+            path = diagnose.model.STANDALONE_LOG
+        else:
+            path = diagnose._opti_log(folder) or folder / "OptiScaler.log"
         stamp = datetime.strptime(crash.when[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
         if not -1 <= stamp - path.stat().st_mtime <= 30:
             return False
@@ -67,6 +74,8 @@ def closing_fault(crash, folder, route):
             stream.seek(max(0, stream.tell() - 4096))
             lines = [line for line in stream.read().decode("utf8", "replace").splitlines() if line.strip()]
         last = lines[-4:]
+        if route == "standalone":
+            return any("standalone session ending" in line for line in last)
         return any(word in line for line in last for word in ("DLL_PROCESS_DETACH", "Unloading OptiScaler")) or (
             any("TryDestroyNGXParameters" in line for line in last) and any("ReleaseFeature" in line for line in lines[-40:]))
     except (OSError, ValueError, TypeError):
@@ -95,6 +104,9 @@ def analyse(entry, target=0, started=""):
     if related and verdict.startswith("Working"):
         verdict = "模型曾运行，但 Windows 记录了游戏崩溃。 / The model ran, but Windows recorded a game crash."
     findings = list(report.findings)
+    if related and not getattr(report, "never_ran", False) and verdict.endswith("play once and check again."):
+        verdict = "ReShade loaded, and the game crashed before the add-on got going - Windows recorded the fault" + (f" in {crash.module}." if crash.module else ".")
+        findings = [item for item in findings if "play once and check again" not in (item.title + " " + item.detail)]
     if related and getattr(report, "never_ran", False):
         verdict = "The game started, but Windows recorded a crash before the session was logged."
         stale = ("has not been started since the install", "own files changed after",
