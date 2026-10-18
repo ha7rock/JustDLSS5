@@ -1,5 +1,5 @@
 """Explicit, asynchronous maintenance of upstream-owned files and registrations."""
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPlainTextEdit,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QMessageBox, QProgressBar)
 from .backend import dlssupdate, installer, openxr, remixdl
@@ -101,6 +101,7 @@ class MaintenanceDialog(QDialog):
 
 
 class RuntimeDialog(MaintenanceDialog):
+    files_changed = Signal()
     def __init__(self, game, chinese, parent=None):
         super().__init__(chinese, parent)
         self.game = game
@@ -163,6 +164,8 @@ class RuntimeDialog(MaintenanceDialog):
         self.submit(work, self.changed, self.t('正在处理…', 'Working…'))
 
     def changed(self, report):
+        if report.done:
+            self.files_changed.emit()
         self.status.setText(self.t('操作完成。', 'Operation complete.') if report.ok else self.t('未完成，请查看结果。', 'Not completed. See the results.'))
         for title, values in ((self.t('已处理', 'Changed'), report.done), (self.t('跳过', 'Skipped'), report.skipped),
                               (self.t('说明', 'Notes'), report.notes)):

@@ -7,4 +7,4 @@ from core import (anticheat, autopilot, autotune, community, compare, components
                   games, gpu, installer, library, log, mfg, net, optiscaler, prefs, profiles,
                   dlssupdate, lookout, openxr, covers, ownfg, gpupref,
                   reengine, remixdl, remixlist, reshade_ini, selfupdate, sources,
-                  update, video, wincrash)
+                  update, video, wincrash, vulkan)
